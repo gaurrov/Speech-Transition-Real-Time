@@ -11,6 +11,7 @@ import { AUDIO_SOURCES } from "./config/audioSources"
 import { LANGUAGES, SOURCE_LANGUAGES } from "./config/languages"
 import { useAudioCapture } from "./hooks/useAudioCapture"
 import { useTranslatorSession } from "./hooks/useTranslatorSession"
+import { DEFAULT_VAD_CONFIG } from "./providers/vad/types"
 import type { SessionMode } from "./types"
 
 const DEFAULT_TARGET_LANGUAGE = "es"
@@ -23,16 +24,32 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [showLatency, setShowLatency] = useState(import.meta.env.DEV)
+  const [vadSilenceThresholdMs, setVadSilenceThresholdMs] = useState(
+    DEFAULT_VAD_CONFIG.silenceThresholdMs,
+  )
+  const [vadSpeechThreshold, setVadSpeechThreshold] = useState(
+    DEFAULT_VAD_CONFIG.speechProbThreshold,
+  )
 
   const session = useTranslatorSession({ mode })
-  const capture = useAudioCapture({ onChunk: session.sendAudio })
+  const capture = useAudioCapture({
+    onChunk: session.sendAudio,
+    onVADEvent: session.sendVADEvent,
+    vadConfig: {
+      silenceThresholdMs: vadSilenceThresholdMs,
+      speechProbThreshold: vadSpeechThreshold,
+    },
+  })
 
   const { setSpeaking } = session
+  const { setVADConfig } = capture
   const speaking = capture.activityAvailable && capture.isSpeaking
 
+  // The worklet's RMS check is only a fallback until the Silero VAD model is
+  // ready; once ready, VAD lifecycle events drive the status instead.
   useEffect(() => {
-    setSpeaking(speaking)
-  }, [speaking, setSpeaking])
+    if (!capture.vadReady) setSpeaking(speaking)
+  }, [capture.vadReady, speaking, setSpeaking])
 
   const handleStart = useCallback(async () => {
     const micOk = await capture.start()
@@ -67,6 +84,22 @@ export default function App() {
     [mode, session, capture],
   )
 
+  const handleVADSilenceThresholdChange = useCallback(
+    (value: number) => {
+      setVadSilenceThresholdMs(value)
+      setVADConfig({ silenceThresholdMs: value })
+    },
+    [setVADConfig],
+  )
+
+  const handleVADSpeechThresholdChange = useCallback(
+    (value: number) => {
+      setVadSpeechThreshold(value)
+      setVADConfig({ speechProbThreshold: value })
+    },
+    [setVADConfig],
+  )
+
   return (
     <main className="min-h-screen bg-slate-100 p-4 text-slate-900 sm:p-6">
       <div className="mx-auto flex max-w-6xl flex-col gap-4">
@@ -74,6 +107,10 @@ export default function App() {
           status={session.status}
           latency={session.latency}
           latencyVisible={import.meta.env.DEV && showLatency}
+          vadStatus={capture.vadStatus}
+          vadReady={capture.vadReady}
+          vadError={capture.vadError}
+          vadVisible={capture.isCapturing}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
@@ -124,6 +161,11 @@ export default function App() {
             bytesSent={capture.bytesSent}
             bytesReceived={session.bytesReceived}
             connectionState={session.connectionState}
+            vadStatus={capture.vadStatus}
+            vadReady={capture.vadReady}
+            vadError={capture.vadError}
+            vadProbability={capture.vadProbability}
+            vadSilenceThresholdMs={vadSilenceThresholdMs}
           />
         )}
 
@@ -140,8 +182,12 @@ export default function App() {
         mode={mode}
         showLatency={showLatency}
         latencyToggleAvailable={import.meta.env.DEV}
+        vadSilenceThresholdMs={vadSilenceThresholdMs}
+        vadSpeechThreshold={vadSpeechThreshold}
         onModeChange={handleModeChange}
         onShowLatencyChange={setShowLatency}
+        onVADSilenceThresholdChange={handleVADSilenceThresholdChange}
+        onVADSpeechThresholdChange={handleVADSpeechThresholdChange}
         onClose={() => setSettingsOpen(false)}
       />
     </main>

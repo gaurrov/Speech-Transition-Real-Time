@@ -8,9 +8,13 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "vad:setup": "node scripts/setup-vad.mjs",
+    "predev": "node scripts/setup-vad.mjs",
+    "prebuild": "node scripts/setup-vad.mjs"
   },
   "dependencies": {
+    "onnxruntime-web": "^1.27.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

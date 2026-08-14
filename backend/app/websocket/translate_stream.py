@@ -55,6 +55,7 @@ class Session:
         self.last_audio_at = 0.0
         self.last_ack_at = 0.0
         self.bytes_per_second = 32000.0
+        self.last_vad_event: schemas.VADEventMessage | None = None
         self._send_lock = asyncio.Lock()
 
     @property
@@ -266,6 +267,32 @@ async def _handle_audio_chunk_control(
     logger.debug("audio_chunk_control", session_id=current.session_id)
 
 
+async def _handle_vad_event(
+    websocket: WebSocket,
+    payload: dict,
+    current: Session | None,
+) -> None:
+    try:
+        message = schemas.VADEventMessage.model_validate(payload)
+    except ValidationError as exc:
+        await _send_error(websocket, "invalid_message", f"Invalid vad_event: {exc}")
+        return
+    if current is None or current.session_id != message.session_id:
+        await _send_error(websocket, "no_active_session", "No matching session on this connection")
+        return
+
+    # Stash the latest transition so utterance finalization can use the last
+    # measured silence gap (duration_ms on silence_detected).
+    current.last_vad_event = message
+    logger.debug(
+        "vad_event",
+        session_id=message.session_id,
+        vad_event=message.event,
+        timestamp_ms=message.timestamp_ms,
+        duration_ms=message.duration_ms,
+    )
+
+
 async def _handle_text_message(
     websocket: WebSocket,
     raw_text: str,
@@ -289,6 +316,9 @@ async def _handle_text_message(
     if message_type == schemas.WSClientEventType.AUDIO_CHUNK.value:
         await _handle_audio_chunk_control(websocket, payload, current)
         return current
+    if message_type == schemas.WSClientEventType.VAD_EVENT.value:
+        await _handle_vad_event(websocket, payload, current)
+        return current
     if message_type == schemas.WSClientEventType.STOP_SESSION.value:
         return await _handle_stop_session(websocket, payload, current)
 
@@ -305,6 +335,7 @@ async def translate_stream(websocket: WebSocket) -> None:
         - JSON {"type": "session_configuration", ...SessionConfiguration}
         - binary frames: raw PCM16/Opus audio chunks
         - JSON {"type": "audio_chunk", "session_id": str} (control, optional)
+        - JSON {"type": "vad_event", "session_id": str, "event": str, ...}
         - JSON {"type": "stop_session", "session_id": str}
       Server -> Client (all JSON envelopes):
         - session_started / audio_received / error / session_stopped

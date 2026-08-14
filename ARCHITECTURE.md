@@ -122,17 +122,36 @@ VAD runs **client-side** for latency reasons (a round-trip to the server just
 to learn "the user stopped talking" would defeat the purpose). The interface:
 
 ```
-init() -> Promise<void>
-start(stream: MediaStream) -> Promise<void>
-stop() -> Promise<void>
-onEvent(callback: (event: VADEvent) => void) -> void
+init() -> Promise<void>                       # load model in background; never blocks
+start() -> Promise<void>                      # begin processing worklet frames
+stop() -> Promise<void>                       # stop + reset the state machine
+processFrame(samples: Float32Array) -> void   # feed one 512-sample window @ 16 kHz
+onEvent(cb: (e: VADEvent) => void) -> () => void
+onStateChange(cb: (s: VADStatus) => void) -> () => void
+onProbability(cb: (p: number) => void) -> () => void   # throttled, diagnostics
+configure(partial: Partial<VADConfig>) -> void          # live threshold changes
+state -> VADStatus                            # idle | loading | speaking | silence | error
 ```
 
-`SileroVADProvider` runs the Silero VAD model inside an `AudioWorkletProcessor`
-so classification happens off the main thread, frame-by-frame, with no
-network round trip. `speech_start`/`speech_end` events are turned into
-`silence` WebSocket messages the backend forwards to the ASR provider as
-endpointing hints.
+The pipeline (see `docs/vad.md` for the full write-up):
+
+- The **AudioWorklet** (`pcmCaptureWorklet.js`) does capture + resampling +
+  PCM16 streaming exactly as before. It additionally emits the same 16 kHz
+  stream as 512-sample Float32 windows for VAD — so streaming is **never
+  blocked** by VAD inference.
+- **`SileroVADProvider`** (`sileroVADProvider.ts`) is a thin main-thread wrapper
+  over a dedicated **Web Worker** (`sileroVADWorker.ts`) that runs the Silero
+  VAD v5 ONNX model with onnxruntime-web (WASM). Model loading is
+  fire-and-forget; frames arriving before the model is ready are buffered
+  (bounded) in the worker and replayed.
+- The worker emits five lifecycle events: `speech_started`, `speaking`
+  (heartbeat while active), `silence_started` (transient, after the hangover),
+  `silence_detected` (utterance boundary after the configurable silence
+  threshold), and `speech_resumed`. A 100 ms pause therefore produces no
+  boundary; a 600 ms pause produces `silence_detected` (with `duration_ms`).
+- Events are forwarded to the UI (● Speaking / ○ Silence detected) and, in
+  live mode, to the backend as `vad_event` messages that the ASR provider can
+  use as endpointing hints later.
 
 The backend also defines a `SilenceDetector` helper
 (`backend/app/services/vad/base.py`) that turns raw silence-duration reports
@@ -167,6 +186,7 @@ raw binary WebSocket messages rather than base64-encoded JSON.
 | Session configuration | `{"type": "session_configuration", session_id, source_language, target_language, audio_source, sample_rate?, encoding?}` |
 | Audio | binary WebSocket frame (raw PCM16 or Opus) |
 | Audio chunk (control) | `{"type": "audio_chunk", "session_id": str}` |
+| VAD event | `{"type": "vad_event", session_id, event, timestamp_ms, duration_ms?, probability?}` — `event` ∈ `speech_started \| speaking \| silence_started \| silence_detected \| speech_resumed` |
 | Stop session | `{"type": "stop_session", "session_id": str}` |
 
 **Server → Client**

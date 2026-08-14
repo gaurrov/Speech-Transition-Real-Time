@@ -5,6 +5,7 @@ import type {
   SessionConfiguration,
 } from "../types"
 import type { StreamingClient, StreamingClientHandlers } from "../providers/streaming/types"
+import type { VADEvent } from "../providers/vad/types"
 
 const WS_PATH = "/ws/translate"
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -53,6 +54,19 @@ export class TranslatorClient implements StreamingClient {
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(bytes)
     }
+  }
+
+  sendVADEvent(event: VADEvent): void {
+    if (this.socket?.readyState !== WebSocket.OPEN || !this.startSessionId) return
+    const message: ClientMessage = {
+      type: "vad_event",
+      session_id: this.startSessionId,
+      event: event.type,
+      timestamp_ms: event.timestamp,
+    }
+    if (event.durationMs !== undefined) message.duration_ms = event.durationMs
+    if (event.probability !== undefined) message.probability = event.probability
+    this.sendJson(message)
   }
 
   sendStopSession(sessionId: string): void {

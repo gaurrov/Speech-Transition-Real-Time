@@ -5,11 +5,13 @@ Streams live speech to text, translates it, and displays translated captions wit
 minimal latency — with silence detection used to produce clean sentence boundaries
 and punctuation.
 
-> **Status:** scaffold complete and verified. The backend boots, serves `/health`,
-> and passes its tests. The frontend boots, builds, and renders the UI shell.
-> Provider interfaces are in place; concrete provider implementations (Deepgram
-> streaming, cloud translation, NLLB fallback, Silero VAD worklet, LLM refinement)
-> are the next build phase — see `DEVELOPMENT_PLAN.md`.
+> **Status:** scaffold complete and verified; client-side Silero VAD is
+> implemented (Phase 1.5). The backend boots, serves `/health`, and passes its
+> tests (including `vad_event` transport tests). The frontend boots, builds, and
+> renders the UI with a working ● Speaking / ○ Silence detected indicator driven
+> by the Silero VAD v5 model running in a Web Worker. Concrete provider
+> implementations for ASR/translation/LLM are the remaining build phases — see
+> `DEVELOPMENT_PLAN.md`.
 
 ## What this is
 

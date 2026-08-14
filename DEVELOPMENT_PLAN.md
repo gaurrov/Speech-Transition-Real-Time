@@ -48,6 +48,29 @@ what could and couldn't be executed in the authoring environment.
 - [ ] Manual test: speak into the mic, see live captions in the Transcript
       panel with reasonable latency.
 
+## Phase 1.5 — Client-side Silero VAD ✅ (this change)
+
+- [x] Silero VAD v5 model runs fully in the browser via onnxruntime-web (WASM)
+      inside a dedicated Web Worker (`sileroVADWorker.ts`); model + WASM runtime
+      provisioned by `frontend/scripts/setup-vad.mjs` into `frontend/public/`.
+- [x] `SileroVADProvider` (`sileroVADProvider.ts`) implements the client
+      `VADProvider` interface; the AudioWorklet keeps resampling/streaming and
+      additionally posts 512-sample Float32 windows, so VAD never blocks audio.
+- [x] Five VAD lifecycle events: `speech_started`, `speaking`,
+      `silence_started`, `silence_detected`, `speech_resumed`, driven by a
+      hysteresis + hangover + configurable silence-threshold state machine
+      (100 ms pause ⇒ no boundary; ≥ 600 ms silence ⇒ `silence_detected`).
+- [x] UI: ● Speaking / ○ Silence detected indicator in the header; settings
+      sliders for the silence threshold and speech sensitivity; diagnostics
+      rows for model status / probability.
+- [x] Backend: `vad_event` client message added to the WS protocol
+      (`schemas.VADEventMessage`), recorded per session for future
+      utterance finalization; transport tests added.
+
+**Exit criteria:** `npm run typecheck` / `npm run lint` / `npm run build` and
+`uv run pytest` all pass (see "Verification"). Manual microphone testing must
+still be run by a human in a real browser (see `docs/vad.md`).
+
 ## Phase 2 — Translation + silence-driven finalization
 
 - [ ] Implement `CloudTranslationProvider.translate` against the selected
@@ -55,10 +78,13 @@ what could and couldn't be executed in the authoring environment.
 - [ ] Add the hybrid router that picks cloud vs. NLLB based on
       `health_check()` / config, sitting behind the same `TranslationProvider`
       call site (no branching in the pipeline code).
-- [ ] Implement `SileroVADProvider` fully (AudioWorklet running the Silero
-      ONNX model) and wire `speech_start`/`speech_end` → `silence` WS messages.
+- [x] Implement `SileroVADProvider` fully (Web Worker running the Silero ONNX
+      model, fed by the AudioWorklet) and wire VAD lifecycle events →
+      `vad_event` WS messages (Phase 1.5).
 - [ ] Backend: use `SilenceDetector` + `ASRProvider.notify_silence` to force
       clean utterance boundaries; verify punctuation/finalization improves.
+- [ ] Backend: consume `session.last_vad_event` (`silence_detected`) to drive
+      that finalization.
 - [ ] Introduce a `PipelineOrchestrator` (backend) that owns per-session state
       and coordinates ASR → translation, keeping `audio_stream.py` thin.
 - [ ] Frontend: populate `translation` state from `translation_partial/final`
@@ -126,3 +152,19 @@ Actually executed on a Windows machine (Python 3.14, uv 0.11.8, Node 24/npm 11):
 - Frontend: `npm run dev` serves the UI shell at `http://localhost:5173` (HTTP 200).
 
 Not yet verified: live ASR/translation (Phase 1+) — requires provider API keys.
+
+## Verification performed for Phase 1.5 (VAD)
+
+- Backend: `uv run pytest` — 18 tests pass, including three new `vad_event`
+  transport tests.
+- Backend: `uv run ruff check .` — clean.
+- Frontend: `npm run typecheck`, `npm run lint`, `npm run build` all clean.
+  The build no longer embeds the 13.5 MB onnxruntime wasm; it is served from
+  `public/vendor/onnx/` via `ort.env.wasm.wasmPaths`.
+- Model contract validated in both onnxruntime (Python) and onnxruntime-web
+  (Node): Silero VAD v5 `input[1,576]` (64 context + 512 window), `state[2,1,128]`,
+  `sr=16000` → `output[1,1]`, `stateN[2,1,128]`. Real speech yields p≈0.2–1.0,
+  silence p<0.01; the JS API produced identical results to the Python probe
+  (1452/1875 windows ≥ 0.5 on the reference test clip).
+- Not verified: real-browser microphone capture and WASM loading in the
+  worker — requires a human with a mic (checklist in `docs/vad.md`).

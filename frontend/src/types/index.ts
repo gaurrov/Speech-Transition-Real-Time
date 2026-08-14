@@ -1,3 +1,5 @@
+import type { VADEventType } from "../providers/vad/types"
+
 export type ConnectionState =
   | "idle"
   | "connecting"
@@ -67,6 +69,14 @@ export type ClientMessage =
   | { type: "start_session"; session_id?: string }
   | { type: "session_configuration" } & SessionConfiguration
   | { type: "audio_chunk"; session_id: string }
+  | {
+      type: "vad_event"
+      session_id: string
+      event: VADEventType
+      timestamp_ms: number
+      duration_ms?: number | null
+      probability?: number | null
+    }
   | { type: "stop_session"; session_id: string }
 
 export type ServerEvent =

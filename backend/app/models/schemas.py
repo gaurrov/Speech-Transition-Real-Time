@@ -22,6 +22,7 @@ class WSClientEventType(str, Enum):
     START_SESSION = "start_session"
     SESSION_CONFIGURATION = "session_configuration"
     AUDIO_CHUNK = "audio_chunk"
+    VAD_EVENT = "vad_event"
     STOP_SESSION = "stop_session"
 
 
@@ -69,6 +70,35 @@ class AudioChunkMessage(BaseModel):
     """Optional JSON control message around binary audio frames."""
 
     session_id: str
+
+
+class VADEventMessage(BaseModel):
+    """
+    Client-side voice activity detection lifecycle event.
+
+    Mirrors the client's VAD state machine: speech_started / speaking /
+    silence_started / silence_detected / speech_resumed. ``duration_ms`` is
+    set on ``silence_detected`` (the measured gap that ended the utterance)
+    and is the input for server-side utterance finalization.
+    """
+
+    type: Literal["vad_event"] = "vad_event"
+    session_id: str
+    event: Literal[
+        "speech_started",
+        "speaking",
+        "silence_started",
+        "silence_detected",
+        "speech_resumed",
+    ]
+    timestamp_ms: int = Field(description="Epoch ms when the transition occurred")
+    duration_ms: int | None = Field(default=None, description="Measured silence gap (ms)")
+    probability: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Silero speech probability at the event",
+    )
 
 
 class StopSessionRequest(BaseModel):

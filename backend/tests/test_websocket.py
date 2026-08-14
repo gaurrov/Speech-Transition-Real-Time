@@ -58,6 +58,55 @@ def test_audio_ack_accumulates_over_chunks(monkeypatch: pytest.MonkeyPatch) -> N
         assert acks[-1]["audio_seconds"] > 0
 
 
+def test_vad_event_is_recorded_on_session() -> None:
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, "vad-1")
+        session = translate_stream.session_manager.get("vad-1")
+        assert session is not None
+        ws.send_json(
+            {
+                "type": "vad_event",
+                "session_id": "vad-1",
+                "event": "silence_detected",
+                "timestamp_ms": 12345,
+                "duration_ms": 600,
+                "probability": 0.02,
+            }
+        )
+        # stop_session acts as a barrier: session_stopped is only sent after
+        # the vad_event message has been processed in order.
+        ws.send_json({"type": "stop_session", "session_id": "vad-1"})
+        assert ws.receive_json()["type"] == "session_stopped"
+        assert session.last_vad_event is not None
+        assert session.last_vad_event.event == "silence_detected"
+        assert session.last_vad_event.duration_ms == 600
+
+
+def test_vad_event_requires_matching_session() -> None:
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, "vad-2")
+        ws.send_json(
+            {
+                "type": "vad_event",
+                "session_id": "other-session",
+                "event": "speech_started",
+                "timestamp_ms": 1,
+            }
+        )
+        err = ws.receive_json()
+        assert err["type"] == "error"
+        assert err["code"] == "no_active_session"
+
+
+def test_invalid_vad_event_is_rejected() -> None:
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, "vad-3")
+        ws.send_json({"type": "vad_event", "session_id": "vad-3", "event": "teleported"})
+        err = ws.receive_json()
+        assert err["type"] == "error"
+        assert err["code"] == "invalid_message"
+
+
 def test_stop_session_yields_session_stopped() -> None:
     with TestClient(app).websocket_connect("/ws/translate") as ws:
         _configure(ws, "stop-1")

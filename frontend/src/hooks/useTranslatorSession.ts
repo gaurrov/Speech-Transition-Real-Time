@@ -1,7 +1,8 @@
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { TranslatorClient } from "../lib/wsClient"
 import { MockStreamingClient } from "../providers/streaming/mockStreamingClient"
 import type { StreamingClient, StreamingClientHandlers } from "../providers/streaming/types"
+import type { VADEvent } from "../providers/vad/types"
 import type {
   ConnectionState,
   LatencyReport,
@@ -30,6 +31,7 @@ export interface TranslatorSession {
   error: string | null
   start: (session: SessionConfiguration) => void
   sendAudio: (bytes: Uint8Array) => void
+  sendVADEvent: (event: VADEvent) => void
   stop: () => void
   setSpeaking: (active: boolean) => void
   dismissError: () => void
@@ -58,8 +60,13 @@ export function useTranslatorSession({
   const [bytesReceived, setBytesReceived] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const clientRef = useRef<StreamingClient | null>(null)
+  const sessionIdRef = useRef<string | null>(null)
   const modeRef = useRef(mode)
   modeRef.current = mode
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId
+  }, [sessionId])
 
   const handleConnectionState = useCallback((state: ConnectionState) => {
     setConnectionState(state)
@@ -193,6 +200,35 @@ export function useTranslatorSession({
     clientRef.current?.sendAudio(bytes)
   }, [])
 
+  const sendVADEvent = useCallback((event: VADEvent) => {
+    const speechOn =
+      event.type === "speech_started" || event.type === "speaking" || event.type === "speech_resumed"
+    const silenceOn = event.type === "silence_started" || event.type === "silence_detected"
+
+    setStatus((current) => {
+      if (
+        current === "idle" ||
+        current === "connecting" ||
+        current === "reconnecting" ||
+        current === "error" ||
+        current === "disconnected"
+      ) {
+        return current
+      }
+      if (speechOn) {
+        return current === "speaking" ? current : "speaking"
+      }
+      if (silenceOn && current === "speaking") {
+        return "silence"
+      }
+      return current
+    })
+
+    if (sessionIdRef.current) {
+      clientRef.current?.sendVADEvent(event)
+    }
+  }, [])
+
   const stop = useCallback(() => {
     const client = clientRef.current
     if (client) {
@@ -233,6 +269,7 @@ export function useTranslatorSession({
     error,
     start,
     sendAudio,
+    sendVADEvent,
     stop,
     setSpeaking,
     dismissError,

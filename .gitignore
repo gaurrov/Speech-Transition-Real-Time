@@ -25,6 +25,10 @@ dist/
 model_cache/
 .cache/
 
+# --- VAD runtime assets (provisioned by frontend/scripts/setup-vad.mjs) ---
+frontend/public/models/
+frontend/public/vendor/onnx/
+
 # --- Editors / OS ---
 .vscode/
 .idea/

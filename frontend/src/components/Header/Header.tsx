@@ -1,12 +1,18 @@
 import type { LatencyReport, SessionStatus } from "../../types"
+import type { VADStatus } from "../../providers/vad/types"
 import { ConnectionStatus } from "../ConnectionStatus"
 import { LatencyIndicator } from "../LatencyIndicator"
+import { VADStatusIndicator } from "../VADStatusIndicator"
 import { GearIcon, GlobeIcon } from "../icons"
 
 export interface HeaderProps {
   status: SessionStatus
   latency: LatencyReport | null
   latencyVisible: boolean
+  vadStatus: VADStatus
+  vadReady: boolean
+  vadError: string | null
+  vadVisible: boolean
   onOpenSettings: () => void
 }
 
@@ -14,6 +20,10 @@ export function Header({
   status,
   latency,
   latencyVisible,
+  vadStatus,
+  vadReady,
+  vadError,
+  vadVisible,
   onOpenSettings,
 }: HeaderProps) {
   return (
@@ -31,6 +41,12 @@ export function Header({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <LatencyIndicator latency={latency} visible={latencyVisible} />
+        <VADStatusIndicator
+          status={vadStatus}
+          ready={vadReady}
+          error={vadError}
+          visible={vadVisible}
+        />
         <ConnectionStatus status={status} />
         <button
           type="button"

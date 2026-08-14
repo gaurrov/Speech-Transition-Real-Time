@@ -1,5 +1,6 @@
 import type { ConnectionState, SessionConfiguration } from "../../types"
 import type { StreamingClient, StreamingClientHandlers } from "./types"
+import type { VADEvent } from "../vad/types"
 
 const DEFAULT_CONFIGURATION: SessionConfiguration = {
   session_id: "mock-session",
@@ -54,6 +55,10 @@ export class MockStreamingClient implements StreamingClient {
   }
 
   sendAudio(_bytes: Uint8Array): void {
+    return
+  }
+
+  sendVADEvent(_event: VADEvent): void {
     return
   }
 

@@ -14,5 +14,7 @@ Planned docs (not yet written):
   meeting-bot integration).
 - `protocol.md` — the WebSocket message contract between frontend and backend.
 
-None of these are needed to run the scaffold — see the README "Getting started"
-section.
+Written so far:
+
+- `vad.md` — client-side Silero VAD: events, thresholds, model loading,
+  browser compatibility, performance, manual test checklist.

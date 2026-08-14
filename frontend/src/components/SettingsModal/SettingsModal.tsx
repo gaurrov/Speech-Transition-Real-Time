@@ -7,8 +7,12 @@ export interface SettingsModalProps {
   mode: SessionMode
   showLatency: boolean
   latencyToggleAvailable: boolean
+  vadSilenceThresholdMs: number
+  vadSpeechThreshold: number
   onModeChange: (mode: SessionMode) => void
   onShowLatencyChange: (value: boolean) => void
+  onVADSilenceThresholdChange: (value: number) => void
+  onVADSpeechThresholdChange: (value: number) => void
   onClose: () => void
 }
 
@@ -17,8 +21,12 @@ export function SettingsModal({
   mode,
   showLatency,
   latencyToggleAvailable,
+  vadSilenceThresholdMs,
+  vadSpeechThreshold,
   onModeChange,
   onShowLatencyChange,
+  onVADSilenceThresholdChange,
+  onVADSpeechThresholdChange,
   onClose,
 }: SettingsModalProps) {
   useEffect(() => {
@@ -88,6 +96,51 @@ export function SettingsModal({
               />
             </label>
           )}
+
+          <fieldset className="flex flex-col gap-3 border-t border-slate-100 pt-4">
+            <legend className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Voice activity detection
+            </legend>
+
+            <label className="flex flex-col gap-2">
+              <span className="flex items-center justify-between text-sm text-slate-700">
+                Utterance silence threshold
+                <span className="font-mono text-xs text-slate-500">{vadSilenceThresholdMs} ms</span>
+              </span>
+              <input
+                type="range"
+                min={100}
+                max={1500}
+                step={50}
+                value={vadSilenceThresholdMs}
+                onChange={(event) => onVADSilenceThresholdChange(Number(event.target.value))}
+                className="accent-indigo-600"
+              />
+              <span className="text-xs text-slate-400">
+                Short pauses (like a 100 ms breath) keep the same utterance. Silence longer
+                than this ends the utterance and triggers the next one.
+              </span>
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="flex items-center justify-between text-sm text-slate-700">
+                Speech sensitivity
+                <span className="font-mono text-xs text-slate-500">{vadSpeechThreshold.toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                min={0.3}
+                max={0.9}
+                step={0.05}
+                value={vadSpeechThreshold}
+                onChange={(event) => onVADSpeechThresholdChange(Number(event.target.value))}
+                className="accent-indigo-600"
+              />
+              <span className="text-xs text-slate-400">
+                Lower values detect quieter speech but can be triggered by background noise.
+              </span>
+            </label>
+          </fieldset>
         </div>
       </div>
     </div>

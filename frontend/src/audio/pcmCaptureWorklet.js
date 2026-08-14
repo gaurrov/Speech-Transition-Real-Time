@@ -28,6 +28,9 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     this.hangoverSeconds = 0.35
     this.speaking = false
     this.hangoverRemaining = 0
+    this.vadQueue = []
+    this.vadEnabled = false
+    this.vadWindowSize = 512
 
     this.port.onmessage = (event) => {
       const message = event.data
@@ -55,6 +58,12 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       this.port.postMessage({ type: "audio", buffer: pcm.buffer }, [pcm.buffer])
     }
 
+    if (this.vadEnabled && this.vadQueue.length >= this.vadWindowSize) {
+      const samples = this.vadQueue.splice(0, this.vadWindowSize)
+      const float = new Float32Array(samples)
+      this.port.postMessage({ type: "vad", samples: float }, [float.buffer])
+    }
+
     return true
   }
 
@@ -71,8 +80,15 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     if (typeof message.outputSampleRate === "number") {
       this.ratio = sampleRate / message.outputSampleRate
     }
+    if (typeof message.vadEnabled === "boolean") {
+      this.vadEnabled = message.vadEnabled
+    }
+    if (typeof message.vadWindowSize === "number") {
+      this.vadWindowSize = message.vadWindowSize
+    }
     this.frac0 = 0
     this.queue.length = 0
+    this.vadQueue.length = 0
   }
 
   pushResampled(input) {
@@ -83,7 +99,11 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       const i0 = Math.floor(position)
       const i1 = i0 < last ? i0 + 1 : last
       const fraction = position - i0
-      this.queue.push(input[i0] * (1 - fraction) + input[i1] * fraction)
+      const value = input[i0] * (1 - fraction) + input[i1] * fraction
+      this.queue.push(value)
+      if (this.vadEnabled) {
+        this.vadQueue.push(value)
+      }
       position += this.ratio
     }
     this.frac0 = position - last

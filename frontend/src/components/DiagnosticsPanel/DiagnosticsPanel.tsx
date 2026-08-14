@@ -1,4 +1,5 @@
 import type { ConnectionState } from "../../types"
+import type { VADStatus } from "../../providers/vad/types"
 
 export interface DiagnosticsPanelProps {
   sampleRate: number | null
@@ -7,6 +8,11 @@ export interface DiagnosticsPanelProps {
   bytesSent: number
   bytesReceived: number
   connectionState: ConnectionState
+  vadStatus: VADStatus
+  vadReady: boolean
+  vadError: string | null
+  vadProbability: number | null
+  vadSilenceThresholdMs: number
 }
 
 function formatBytes(bytes: number): string {
@@ -31,6 +37,12 @@ function Row({ label, value }: RowProps) {
   )
 }
 
+function vadModelLabel(ready: boolean, error: string | null, status: VADStatus): string {
+  if (error) return `error (${status})`
+  if (!ready) return "loading…"
+  return status
+}
+
 export function DiagnosticsPanel({
   sampleRate,
   chunkSizeBytes,
@@ -38,6 +50,11 @@ export function DiagnosticsPanel({
   bytesSent,
   bytesReceived,
   connectionState,
+  vadStatus,
+  vadReady,
+  vadError,
+  vadProbability,
+  vadSilenceThresholdMs,
 }: DiagnosticsPanelProps) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -55,6 +72,12 @@ export function DiagnosticsPanel({
         <Row label="Bytes sent" value={formatBytes(bytesSent)} />
         <Row label="Bytes received (server)" value={formatBytes(bytesReceived)} />
         <Row label="WebSocket state" value={connectionState} />
+        <Row label="VAD model" value={vadModelLabel(vadReady, vadError, vadStatus)} />
+        <Row
+          label="VAD probability"
+          value={vadProbability !== null ? vadProbability.toFixed(3) : "—"}
+        />
+        <Row label="VAD silence threshold" value={`${vadSilenceThresholdMs} ms`} />
       </dl>
     </section>
   )

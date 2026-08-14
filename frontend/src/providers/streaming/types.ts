@@ -1,4 +1,5 @@
 import type { ConnectionState, ServerEvent, SessionConfiguration } from "../../types"
+import type { VADEvent } from "../vad/types"
 
 export interface StreamingClientHandlers {
   onEvent: (event: ServerEvent) => void
@@ -11,6 +12,7 @@ export interface StreamingClient {
   sendStartSession(sessionId: string): void
   sendConfiguration(config: SessionConfiguration): void
   sendAudio(bytes: Uint8Array): void
+  sendVADEvent(event: VADEvent): void
   sendStopSession(sessionId: string): void
   close(): void
   readonly isOpen: boolean
