@@ -1,0 +1,53 @@
+[project]
+name = "translator-backend"
+version = "0.1.0"
+description = "FastAPI backend for the Real-Time Translator: streaming ASR, translation, VAD, and async LLM refinement."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "structlog>=24.1",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# Heavy ML stack for the offline NLLB-200 translation fallback. Loaded lazily
+# and only when the NLLB provider is selected. torch/transformers do not yet
+# ship stable wheels for Python 3.14, so this extra targets 3.11/3.12.
+offline = [
+    "torch>=2.2",
+    "transformers>=4.40",
+    "sentencepiece>=0.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.8",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv", ".pytest_cache"]
+
+[tool.ruff.lint]
+# Catching blind Exception in the websocket transport layer is deliberate:
+# the connection may already be closed, and there is nothing meaningful to do.
+ignore = ["BLE001"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+check_untyped_defs = true
