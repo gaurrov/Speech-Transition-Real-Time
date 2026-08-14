@@ -68,11 +68,12 @@ export function SettingsModal({
               onChange={(event) => onModeChange(event.target.value as SessionMode)}
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none"
             >
-              <option value="mock">Mock demo (simulated stream)</option>
+              <option value="mock">Demo (no backend)</option>
               <option value="live">Live WebSocket</option>
             </select>
             <span className="text-xs text-slate-400">
-              Mock mode simulates the streaming pipeline without a backend.
+              Demo mode captures your microphone locally without transmitting audio. Use
+              Live WebSocket to stream to the backend.
             </span>
           </label>
 

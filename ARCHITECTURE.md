@@ -31,8 +31,8 @@
                                            │ 16kHz PCM frames + silence events
                                            ▼  (WebSocket, binary + JSON control)
                               ┌────────────────────────┐
-                              │   FastAPI WS endpoint    │  backend/app/websocket
-                              │   /ws/audio               │
+                               │   FastAPI WS endpoint    │  backend/app/websocket
+                               │   /ws/translate           │
                               └────────────┬─────────────┘
                                            │
                           ┌────────────────┼────────────────┐
@@ -155,26 +155,31 @@ here" events.
 
 ## 5. WebSocket protocol
 
-Single endpoint: `ws://<backend>/ws/audio`. See
-`backend/app/models/schemas.py` for exact payloads.
+Single endpoint: `ws://<backend>/ws/translate`. See
+`backend/app/models/schemas.py` for exact payloads. Every message is a JSON
+envelope of the form `{"type": "<message>", ...fields}`; audio frames travel as
+raw binary WebSocket messages rather than base64-encoded JSON.
 
 **Client → Server**
 | Message | Shape |
 |---|---|
-| Start session | `{"type": "start", "source_language", "target_language", "sample_rate", "encoding"}` |
+| Start session | `{"type": "start_session", "session_id"?: str}` |
+| Session configuration | `{"type": "session_configuration", session_id, source_language, target_language, audio_source, sample_rate?, encoding?}` |
 | Audio | binary WebSocket frame (raw PCM16 or Opus) |
-| Silence event | `{"type": "silence", "duration_ms": N}` |
-| Stop session | `{"type": "stop"}` |
+| Audio chunk (control) | `{"type": "audio_chunk", "session_id": str}` |
+| Stop session | `{"type": "stop_session", "session_id": str}` |
 
 **Server → Client**
 | Message | Shape |
 |---|---|
-| Partial/final transcript | `{"type": "transcript_partial" \| "transcript_final", ...TranscriptSegment}` |
-| Partial/final translation | `{"type": "translation_partial" \| "translation_final", ...TranslationSegment}` |
-| Async refinement | `{"type": "refinement", ...RefinementResult}` |
-| Status | `{"type": "status", "message": str}` |
-| Error | `{"type": "error", "code": str, "message": str}` |
-| Latency report | `{"type": "latency", ...LatencyReport}` |
+| Session started | `{"type": "session_started", session_id, configuration}` |
+| Speech lifecycle | `{"type": "speech_started" \| "silence_detected" \| "speech_resumed", session_id, timestamp_ms, duration_ms?}` |
+| Partial/final transcript | `{"type": "partial_transcript" \| "final_transcript", session_id, ...TranscriptEvent}` |
+| Translation | `{"type": "translation", session_id, ...TranslationEvent}` |
+| Async refinement | `{"type": "refined_transcript", session_id, segment_id, refined_text, changed}` |
+| Latency report | `{"type": "latency", session_id, segment_id, asr_ms, translation_ms, end_to_end_ms}` |
+| Error | `{"type": "error", code, message, session_id?}` |
+| Session stopped | `{"type": "session_stopped", session_id, reason}` |
 
 ## 6. Frontend structure
 
@@ -212,7 +217,7 @@ backend/app/
 ├── main.py              FastAPI app: CORS, router mounting, /health
 ├── config.py             pydantic-settings Settings, env-driven
 ├── websocket/
-│   └── audio_stream.py   /ws/audio transport layer (thin)
+│   └── translate_stream.py  /ws/translate transport layer (thin) + SessionManager
 ├── services/
 │   ├── asr/               ASRProvider + DeepgramASRProvider
 │   ├── translation/        TranslationProvider + Cloud/NLLB implementations
@@ -224,7 +229,7 @@ backend/app/
     └── logging.py           structlog setup
 ```
 
-Notice `websocket/audio_stream.py` stays thin on purpose — it's transport, not
+Notice `websocket/translate_stream.py` stays thin on purpose — it's transport, not
 orchestration. As Phase 2 (see `DEVELOPMENT_PLAN.md`) lands, a
 `PipelineOrchestrator` (or similar) will sit between the transport layer and
 the providers, owning per-session state, provider selection, and the async

@@ -19,11 +19,15 @@ export type SessionStatus =
 
 export type SessionMode = "mock" | "live"
 
-export interface SessionStartRequest {
+export type AudioEncoding = "linear16" | "opus"
+
+export interface SessionConfiguration {
+  session_id: string
   source_language: string
   target_language: string
+  audio_source: string
   sample_rate: number
-  encoding: "linear16" | "opus"
+  encoding: AudioEncoding
 }
 
 export interface TranscriptSegment {
@@ -59,14 +63,35 @@ export interface LatencyReport {
   end_to_end_ms?: number | null
 }
 
+export type ClientMessage =
+  | { type: "start_session"; session_id?: string }
+  | { type: "session_configuration" } & SessionConfiguration
+  | { type: "audio_chunk"; session_id: string }
+  | { type: "stop_session"; session_id: string }
+
 export type ServerEvent =
-  | ({ type: "transcript_partial" | "transcript_final" } & TranscriptSegment)
-  | ({ type: "translation_partial" | "translation_final" } & TranslationSegment)
-  | ({ type: "refinement" } & RefinementResult)
-  | ({ type: "session_state"; state: SessionStatus })
-  | ({ type: "status"; message: string })
-  | ({ type: "error"; code: string; message: string })
-  | ({ type: "latency" } & LatencyReport)
+  | { type: "session_started"; session_id: string; configuration: SessionConfiguration }
+  | { type: "speech_started"; session_id: string; timestamp_ms: number }
+  | {
+      type: "silence_detected"
+      session_id: string
+      timestamp_ms: number
+      duration_ms?: number | null
+    }
+  | { type: "speech_resumed"; session_id: string; timestamp_ms: number }
+  | {
+      type: "audio_received"
+      session_id: string
+      chunks: number
+      bytes: number
+      audio_seconds: number
+    }
+  | ({ type: "partial_transcript" | "final_transcript"; session_id: string } & TranscriptSegment)
+  | ({ type: "translation"; session_id: string } & TranslationSegment)
+  | ({ type: "refined_transcript"; session_id: string } & RefinementResult)
+  | ({ type: "latency"; session_id: string } & LatencyReport)
+  | { type: "error"; session_id?: string; code: string; message: string }
+  | { type: "session_stopped"; session_id: string; reason: string }
 
 export interface LanguageOption {
   code: string

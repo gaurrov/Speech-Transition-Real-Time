@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.utils.logging import configure_logging
-from app.websocket.audio_stream import router as audio_stream_router
+from app.websocket.translate_stream import router as translate_stream_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -45,7 +45,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(audio_stream_router)
+app.include_router(translate_stream_router)
 
 
 @app.get("/health", tags=["system"])

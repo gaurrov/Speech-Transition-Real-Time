@@ -1,5 +1,6 @@
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { AudioControls } from "./components/AudioControls"
+import { DiagnosticsPanel } from "./components/DiagnosticsPanel"
 import { ErrorBanner } from "./components/ErrorBanner"
 import { Header } from "./components/Header"
 import { LanguageControls } from "./components/LanguageControls"
@@ -7,7 +8,7 @@ import { SettingsModal } from "./components/SettingsModal"
 import { TranscriptPanel } from "./components/TranscriptPanel"
 import { TranslationPanel } from "./components/TranslationPanel"
 import { AUDIO_SOURCES } from "./config/audioSources"
-import { LANGUAGES, SOURCE_LANGUAGES, languageLabel } from "./config/languages"
+import { LANGUAGES, SOURCE_LANGUAGES } from "./config/languages"
 import { useAudioCapture } from "./hooks/useAudioCapture"
 import { useTranslatorSession } from "./hooks/useTranslatorSession"
 import type { SessionMode } from "./types"
@@ -24,19 +25,28 @@ export default function App() {
   const [showLatency, setShowLatency] = useState(import.meta.env.DEV)
 
   const session = useTranslatorSession({ mode })
-  const capture = useAudioCapture({ simulate: mode === "mock" })
+  const capture = useAudioCapture({ onChunk: session.sendAudio })
+
+  const { setSpeaking } = session
+  const speaking = capture.activityAvailable && capture.isSpeaking
+
+  useEffect(() => {
+    setSpeaking(speaking)
+  }, [speaking, setSpeaking])
 
   const handleStart = useCallback(async () => {
     const micOk = await capture.start()
     if (!micOk) return
     session.start({
+      session_id: crypto.randomUUID(),
       source_language: sourceLanguage,
       target_language: targetLanguage,
+      audio_source: audioSource,
       sample_rate: 16_000,
       encoding: "linear16",
     })
     setIsRunning(true)
-  }, [capture, session, sourceLanguage, targetLanguage])
+  }, [capture, session, sourceLanguage, targetLanguage, audioSource])
 
   const handleStop = useCallback(() => {
     session.stop()
@@ -67,7 +77,7 @@ export default function App() {
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        <ErrorBanner message={session.error} onDismiss={session.dismissError} />
+        <ErrorBanner message={session.error ?? capture.error} onDismiss={session.dismissError} />
 
         <section className="flex flex-col gap-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <LanguageControls
@@ -106,10 +116,21 @@ export default function App() {
           />
         </section>
 
+        {import.meta.env.DEV && (
+          <DiagnosticsPanel
+            sampleRate={capture.sampleRate}
+            chunkSizeBytes={capture.chunkSizeBytes}
+            chunksPerSecond={capture.chunksPerSecond}
+            bytesSent={capture.bytesSent}
+            bytesReceived={session.bytesReceived}
+            connectionState={session.connectionState}
+          />
+        )}
+
         {mode === "mock" && (
           <p className="text-center text-xs text-slate-400">
-            Demo mode — {languageLabel(targetLanguage)} is simulated. Open settings to
-            connect a live backend.
+            Demo mode — microphone audio is captured locally but not sent anywhere. Open
+            settings and switch to Live WebSocket to stream audio to the backend.
           </p>
         )}
       </div>

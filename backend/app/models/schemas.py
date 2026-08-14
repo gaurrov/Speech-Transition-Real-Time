@@ -1,9 +1,10 @@
 """
-Shared Pydantic models for WebSocket messages and internal pipeline data.
+Shared Pydantic models for the WebSocket translation protocol.
 
-Keeping these in one place makes the client/server message contract
-explicit and lets both the websocket layer and the service layer speak
-the same vocabulary.
+The client/server contract lives here so the WebSocket transport layer and
+any future pipeline orchestrator speak the same vocabulary. Every message is
+a JSON envelope of the form ``{"type": "<event>", ...fields}``; audio frames
+travel as raw binary WebSocket messages rather than base64-encoded JSON.
 """
 from __future__ import annotations
 
@@ -12,34 +13,166 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+AudioEncoding = Literal["linear16", "opus"]
+
 
 class WSClientEventType(str, Enum):
     """Messages the frontend sends to the backend."""
 
-    START = "start"           # begin a session: languages, sample rate, etc.
-    AUDIO_CHUNK = "audio_chunk"  # base64 or binary frame handled out-of-band
-    SILENCE = "silence"        # client-side VAD detected silence boundary
-    STOP = "stop"
+    START_SESSION = "start_session"
+    SESSION_CONFIGURATION = "session_configuration"
+    AUDIO_CHUNK = "audio_chunk"
+    STOP_SESSION = "stop_session"
 
 
 class WSServerEventType(str, Enum):
     """Messages the backend sends to the frontend."""
 
-    TRANSCRIPT_PARTIAL = "transcript_partial"
-    TRANSCRIPT_FINAL = "transcript_final"
-    TRANSLATION_PARTIAL = "translation_partial"
-    TRANSLATION_FINAL = "translation_final"
-    REFINEMENT = "refinement"   # async LLM-corrected version of a final segment
-    STATUS = "status"
-    ERROR = "error"
+    SESSION_STARTED = "session_started"
+    PARTIAL_TRANSCRIPT = "partial_transcript"
+    FINAL_TRANSCRIPT = "final_transcript"
+    SPEECH_STARTED = "speech_started"
+    SILENCE_DETECTED = "silence_detected"
+    SPEECH_RESUMED = "speech_resumed"
+    TRANSLATION = "translation"
+    REFINED_TRANSCRIPT = "refined_transcript"
     LATENCY = "latency"
+    AUDIO_RECEIVED = "audio_received"
+    ERROR = "error"
+    SESSION_STOPPED = "session_stopped"
 
 
-class SessionStartRequest(BaseModel):
-    source_language: str = Field(description="BCP-47 code, e.g. 'en-US', or 'auto'")
+# --- Client -> Server -------------------------------------------------------
+
+
+class StartSessionRequest(BaseModel):
+    """Ask the server to begin a translation session for this connection."""
+
+    session_id: str | None = Field(
+        default=None,
+        description="Client-generated UUID. The server generates one when omitted.",
+    )
+
+
+class SessionConfiguration(BaseModel):
+    """Full configuration for a session: languages, audio source, session id."""
+
+    session_id: str
+    source_language: str = Field(description="BCP-47 code, e.g. 'en', or 'auto'")
     target_language: str = Field(description="BCP-47 code, e.g. 'es'")
+    audio_source: str = Field(description="'microphone', 'system', or a mock source id")
     sample_rate: int = 16_000
-    encoding: Literal["linear16", "opus"] = "linear16"
+    encoding: AudioEncoding = "linear16"
+
+
+class AudioChunkMessage(BaseModel):
+    """Optional JSON control message around binary audio frames."""
+
+    session_id: str
+
+
+class StopSessionRequest(BaseModel):
+    """Gracefully end a session."""
+
+    session_id: str
+
+
+# --- Server -> Client -------------------------------------------------------
+
+
+class SessionStartedEvent(BaseModel):
+    """Emitted when a session exists with a known configuration."""
+
+    type: Literal["session_started"] = "session_started"
+    session_id: str
+    configuration: SessionConfiguration
+
+
+class SpeechEvent(BaseModel):
+    """speech_started / silence_detected / speech_resumed lifecycle events."""
+
+    type: Literal["speech_started", "silence_detected", "speech_resumed"]
+    session_id: str
+    timestamp_ms: int
+    duration_ms: int | None = None  # silence_detected only: how long the gap was
+
+
+class TranscriptEvent(BaseModel):
+    """partial_transcript / final_transcript streamed ASR results."""
+
+    type: Literal["partial_transcript", "final_transcript"]
+    session_id: str
+    segment_id: str
+    text: str
+    is_final: bool
+    start_ms: int | None = None
+    end_ms: int | None = None
+    confidence: float | None = None
+
+
+class TranslationEvent(BaseModel):
+    """A translation of a finalized transcript segment."""
+
+    type: Literal["translation"] = "translation"
+    session_id: str
+    segment_id: str
+    source_text: str
+    translated_text: str
+    source_language: str
+    target_language: str
+    is_final: bool = True
+    provider: str
+
+
+class RefinedTranscriptEvent(BaseModel):
+    """Async, non-blocking correction of an already-finalized segment."""
+
+    type: Literal["refined_transcript"] = "refined_transcript"
+    session_id: str
+    segment_id: str
+    refined_text: str
+    changed: bool
+
+
+class LatencyEvent(BaseModel):
+    """Per-segment timing report (ms)."""
+
+    type: Literal["latency"] = "latency"
+    session_id: str
+    segment_id: str
+    asr_ms: float | None = None
+    translation_ms: float | None = None
+    end_to_end_ms: float | None = None
+
+
+class AudioReceivedEvent(BaseModel):
+    """Progress ack for the live audio stream: totals received so far."""
+
+    type: Literal["audio_received"] = "audio_received"
+    session_id: str
+    chunks: int
+    bytes: int
+    audio_seconds: float
+
+
+class ErrorMessage(BaseModel):
+    """Error envelope sent to the client."""
+
+    type: Literal["error"] = "error"
+    session_id: str | None = None
+    code: str
+    message: str
+
+
+class SessionStoppedEvent(BaseModel):
+    """Confirmation that a session has been torn down."""
+
+    type: Literal["session_stopped"] = "session_stopped"
+    session_id: str
+    reason: str
+
+
+# --- Internal pipeline data models (used by provider interfaces) -----------
 
 
 class TranscriptSegment(BaseModel):
@@ -67,13 +200,14 @@ class RefinementResult(BaseModel):
     changed: bool
 
 
-class ErrorMessage(BaseModel):
-    code: str
-    message: str
-
-
-class LatencyReport(BaseModel):
-    segment_id: str
-    asr_ms: float | None = None
-    translation_ms: float | None = None
-    end_to_end_ms: float | None = None
+ServerEvent = (
+    SessionStartedEvent
+    | SpeechEvent
+    | TranscriptEvent
+    | TranslationEvent
+    | RefinedTranscriptEvent
+    | LatencyEvent
+    | AudioReceivedEvent
+    | ErrorMessage
+    | SessionStoppedEvent
+)

@@ -6,8 +6,8 @@ import type {
   ConnectionState,
   LatencyReport,
   ServerEvent,
+  SessionConfiguration,
   SessionMode,
-  SessionStartRequest,
   SessionStatus,
   TranslationSegment,
   TranscriptSegment,
@@ -20,14 +20,18 @@ export interface UseTranslatorSessionOptions {
 export interface TranslatorSession {
   connectionState: ConnectionState
   status: SessionStatus
+  sessionId: string | null
   transcriptSegments: TranscriptSegment[]
   partialText: string
   translationSegments: TranslationSegment[]
   latestTranslation: TranslationSegment | null
   latency: LatencyReport | null
+  bytesReceived: number
   error: string | null
-  start: (session: SessionStartRequest) => void
+  start: (session: SessionConfiguration) => void
+  sendAudio: (bytes: Uint8Array) => void
   stop: () => void
+  setSpeaking: (active: boolean) => void
   dismissError: () => void
 }
 
@@ -45,11 +49,13 @@ export function useTranslatorSession({
 }: UseTranslatorSessionOptions = {}): TranslatorSession {
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle")
   const [status, setStatus] = useState<SessionStatus>("idle")
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([])
   const [partialText, setPartialText] = useState("")
   const [translationSegments, setTranslationSegments] = useState<TranslationSegment[]>([])
   const [latestTranslation, setLatestTranslation] = useState<TranslationSegment | null>(null)
   const [latency, setLatency] = useState<LatencyReport | null>(null)
+  const [bytesReceived, setBytesReceived] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const clientRef = useRef<StreamingClient | null>(null)
   const modeRef = useRef(mode)
@@ -57,29 +63,46 @@ export function useTranslatorSession({
 
   const handleConnectionState = useCallback((state: ConnectionState) => {
     setConnectionState(state)
-    if (state === "connecting" || state === "reconnecting") {
-      setStatus(state === "reconnecting" ? "reconnecting" : "connecting")
-    } else if (state === "connected") {
-      setStatus((current) =>
-        current === "idle" || current === "connecting" ? "connected" : current,
-      )
-    } else if (state === "disconnected") {
-      setStatus((current) => (current === "error" ? "error" : "disconnected"))
+    switch (state) {
+      case "connecting":
+        setStatus("connecting")
+        break
+      case "reconnecting":
+        setStatus("reconnecting")
+        break
+      case "connected":
+        setStatus((current) =>
+          current === "idle" || current === "connecting" || current === "reconnecting"
+            ? "connected"
+            : current,
+        )
+        break
+      case "disconnected":
+        setStatus((current) => (current === "error" ? "error" : "disconnected"))
+        break
+      default:
+        break
     }
   }, [])
 
   const handleEvent = useCallback((event: ServerEvent) => {
     switch (event.type) {
-      case "session_state":
-        setStatus(event.state)
-        if (event.state === "connected" || event.state === "listening") {
-          setError(null)
-        }
+      case "session_started":
+        setStatus("listening")
+        setError(null)
         break
-      case "transcript_partial":
+      case "speech_started":
+      case "speech_resumed":
+        setStatus("speaking")
+        break
+      case "partial_transcript":
         setPartialText(event.text)
+        setStatus("speaking")
         break
-      case "transcript_final": {
+      case "silence_detected":
+        setStatus("silence")
+        break
+      case "final_transcript": {
         const segment: TranscriptSegment = {
           segment_id: event.segment_id,
           text: event.text,
@@ -93,9 +116,10 @@ export function useTranslatorSession({
           segment,
         ])
         setPartialText("")
+        setStatus("translating")
         break
       }
-      case "translation_partial": {
+      case "translation": {
         const segment: TranslationSegment = {
           segment_id: event.segment_id,
           source_text: event.source_text,
@@ -106,30 +130,20 @@ export function useTranslatorSession({
           provider: event.provider,
         }
         setLatestTranslation(segment)
-        break
-      }
-      case "translation_final": {
-        const segment: TranslationSegment = {
-          segment_id: event.segment_id,
-          source_text: event.source_text,
-          translated_text: event.translated_text,
-          source_language: event.source_language,
-          target_language: event.target_language,
-          is_final: true,
-          provider: event.provider,
+        if (event.is_final) {
+          setTranslationSegments((prev) => [
+            ...prev.filter((existing) => existing.segment_id !== event.segment_id),
+            segment,
+          ])
         }
-        setLatestTranslation(segment)
-        setTranslationSegments((prev) => [
-          ...prev.filter((existing) => existing.segment_id !== event.segment_id),
-          segment,
-        ])
+        setStatus("listening")
         break
       }
-      case "refinement":
+      case "refined_transcript":
         setTranscriptSegments((prev) =>
           prev.map((segment) =>
             segment.segment_id === event.segment_id
-              ? { ...segment, text: event.refined_text, refined: true }
+              ? { ...segment, text: event.refined_text, refined: event.changed }
               : segment,
           ),
         )
@@ -137,58 +151,90 @@ export function useTranslatorSession({
       case "latency":
         setLatency(event)
         break
+      case "audio_received":
+        setBytesReceived(event.bytes)
+        break
       case "error":
         setError(event.message)
         setStatus("error")
         break
-      case "status":
+      case "session_stopped":
         break
     }
   }, [])
 
   const start = useCallback(
-    (session: SessionStartRequest) => {
+    (session: SessionConfiguration) => {
       setError(null)
       setTranscriptSegments([])
       setTranslationSegments([])
       setPartialText("")
       setLatestTranslation(null)
       setLatency(null)
+      setBytesReceived(0)
       setStatus("connecting")
+      setSessionId(session.session_id)
 
       clientRef.current?.close()
-      clientRef.current = createClient(modeRef.current, {
+      const client = createClient(modeRef.current, {
         onEvent: handleEvent,
         onStateChange: handleConnectionState,
         onError: (message) => setError(message),
       })
-      clientRef.current.connect()
-      clientRef.current.sendStart(session)
+      clientRef.current = client
+      client.connect()
+      client.sendStartSession(session.session_id)
+      client.sendConfiguration(session)
     },
     [handleEvent, handleConnectionState],
   )
 
-  const stop = useCallback(() => {
-    clientRef.current?.sendStop()
-    clientRef.current?.close()
-    clientRef.current = null
-    setConnectionState("idle")
-    setStatus("idle")
+  const sendAudio = useCallback((bytes: Uint8Array) => {
+    clientRef.current?.sendAudio(bytes)
   }, [])
 
+  const stop = useCallback(() => {
+    const client = clientRef.current
+    if (client) {
+      const currentSessionId = sessionId
+      if (currentSessionId) client.sendStopSession(currentSessionId)
+      client.close()
+    }
+    clientRef.current = null
+    setSessionId(null)
+    setConnectionState("idle")
+    setStatus("idle")
+  }, [sessionId])
+
   const dismissError = useCallback(() => setError(null), [])
+
+  const setSpeaking = useCallback((active: boolean) => {
+    setStatus((current) => {
+      if (active && (current === "listening" || current === "connected" || current === "speaking")) {
+        return "speaking"
+      }
+      if (!active && current === "speaking") {
+        return "listening"
+      }
+      return current
+    })
+  }, [])
 
   return {
     connectionState,
     status,
+    sessionId,
     transcriptSegments,
     partialText,
     translationSegments,
     latestTranslation,
     latency,
+    bytesReceived,
     error,
     start,
+    sendAudio,
     stop,
+    setSpeaking,
     dismissError,
   }
 }

@@ -1,4 +1,4 @@
-import type { ConnectionState, ServerEvent, SessionStartRequest } from "../../types"
+import type { ConnectionState, ServerEvent, SessionConfiguration } from "../../types"
 
 export interface StreamingClientHandlers {
   onEvent: (event: ServerEvent) => void
@@ -8,10 +8,10 @@ export interface StreamingClientHandlers {
 
 export interface StreamingClient {
   connect(): void
-  sendStart(start: SessionStartRequest): void
-  sendSilence(duration_ms: number): void
-  sendStop(): void
+  sendStartSession(sessionId: string): void
+  sendConfiguration(config: SessionConfiguration): void
   sendAudio(bytes: Uint8Array): void
+  sendStopSession(sessionId: string): void
   close(): void
   readonly isOpen: boolean
 }

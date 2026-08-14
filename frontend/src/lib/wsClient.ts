@@ -1,7 +1,14 @@
-import type { ConnectionState, ServerEvent, SessionStartRequest } from "../types"
+import type {
+  ClientMessage,
+  ConnectionState,
+  ServerEvent,
+  SessionConfiguration,
+} from "../types"
 import type { StreamingClient, StreamingClientHandlers } from "../providers/streaming/types"
 
-const WS_PATH = "/ws/audio"
+const WS_PATH = "/ws/translate"
+const MAX_RECONNECT_ATTEMPTS = 5
+const RECONNECT_BASE_DELAY_MS = 500
 
 function wsUrl(): string {
   const host = import.meta.env.VITE_BACKEND_HOST ?? "localhost:8000"
@@ -12,45 +19,34 @@ function wsUrl(): string {
 
 export class TranslatorClient implements StreamingClient {
   private socket: WebSocket | null = null
+  private pending: ClientMessage[] = []
+  private explicitlyClosed = false
+  private reconnectAttempts = 0
+  private reconnectTimer: number | null = null
+  private startSessionId: string | null = null
+  private configuration: SessionConfiguration | null = null
 
   constructor(private readonly handlers: StreamingClientHandlers) {}
 
+  get isOpen(): boolean {
+    return this.socket?.readyState === WebSocket.OPEN
+  }
+
   connect(): void {
     if (this.socket) return
+    this.explicitlyClosed = false
     this.setState("connecting")
-    const socket = new WebSocket(wsUrl())
-    this.socket = socket
-
-    socket.onopen = () => {
-      this.setState("connected")
-    }
-    socket.onmessage = (event: MessageEvent<string>) => {
-      try {
-        const data = JSON.parse(event.data) as ServerEvent
-        this.handlers.onEvent(data)
-      } catch {
-        this.handlers.onError("Received a malformed message from the server")
-      }
-    }
-    socket.onerror = () => {
-      this.handlers.onError("WebSocket error")
-    }
-    socket.onclose = () => {
-      this.socket = null
-      this.setState("disconnected")
-    }
+    this.openSocket()
   }
 
-  sendStart(start: SessionStartRequest): void {
-    this.sendJson({ type: "start", ...start })
+  sendStartSession(sessionId: string): void {
+    this.startSessionId = sessionId
+    this.queue({ type: "start_session", session_id: sessionId })
   }
 
-  sendSilence(duration_ms: number): void {
-    this.sendJson({ type: "silence", duration_ms })
-  }
-
-  sendStop(): void {
-    this.sendJson({ type: "stop" })
+  sendConfiguration(config: SessionConfiguration): void {
+    this.configuration = config
+    this.queue({ type: "session_configuration", ...config })
   }
 
   sendAudio(bytes: Uint8Array): void {
@@ -59,17 +55,106 @@ export class TranslatorClient implements StreamingClient {
     }
   }
 
+  sendStopSession(sessionId: string): void {
+    this.queue({ type: "stop_session", session_id: sessionId })
+  }
+
   close(): void {
-    this.socket?.close()
-    this.socket = null
+    this.explicitlyClosed = true
+    this.stopReconnect()
+    this.pending = []
+    if (this.socket) {
+      this.socket.onclose = null
+      this.socket.close()
+      this.socket = null
+    }
     this.setState("idle")
   }
 
-  get isOpen(): boolean {
-    return this.socket?.readyState === WebSocket.OPEN
+  private openSocket(): void {
+    const socket = new WebSocket(wsUrl())
+    this.socket = socket
+    socket.binaryType = "arraybuffer"
+
+    socket.onopen = () => {
+      this.reconnectAttempts = 0
+      if (this.startSessionId) {
+        this.pending.unshift({ type: "start_session", session_id: this.startSessionId })
+      }
+      if (this.configuration) {
+        this.pending.push({ type: "session_configuration", ...this.configuration })
+      }
+      this.flushQueue()
+      this.setState("connected")
+    }
+
+    socket.onmessage = (event: MessageEvent) => {
+      if (typeof event.data !== "string") return
+      try {
+        const data = JSON.parse(event.data) as ServerEvent
+        this.handlers.onEvent(data)
+      } catch {
+        this.handlers.onError("Received a malformed message from the server")
+      }
+    }
+
+    socket.onerror = () => {
+      this.handlers.onError("WebSocket connection error")
+    }
+
+    socket.onclose = () => {
+      if (this.socket !== socket) return
+      this.socket = null
+      if (this.explicitlyClosed) {
+        this.setState("disconnected")
+        return
+      }
+      this.scheduleReconnect()
+    }
   }
 
-  private sendJson(payload: unknown): void {
+  private queue(message: ClientMessage): void {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.sendJson(message)
+      return
+    }
+    this.pending.push(message)
+  }
+
+  private flushQueue(): void {
+    const messages = this.pending
+    this.pending = []
+    for (const message of messages) {
+      this.sendJson(message)
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.explicitlyClosed) return
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.setState("disconnected")
+      this.handlers.onError("Connection lost. Reconnect attempts exhausted.")
+      return
+    }
+    this.setState("reconnecting")
+    const delay = RECONNECT_BASE_DELAY_MS * 2 ** this.reconnectAttempts
+    this.reconnectAttempts += 1
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null
+      if (this.explicitlyClosed) return
+      this.setState("reconnecting")
+      this.openSocket()
+    }, delay)
+  }
+
+  private stopReconnect(): void {
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+  }
+
+  private sendJson(payload: ClientMessage): void {
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(payload))
     }
