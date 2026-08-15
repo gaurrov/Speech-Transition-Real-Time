@@ -1,31 +1,57 @@
 """
 NLLBTranslationProvider: offline/fallback translation using NLLB-200.
 
-Loaded lazily and only when selected, since the model + torch runtime
-are heavy (see the `offline-translation` extra in pyproject.toml). This
-provider trades latency for availability -- it should be used when the
-cloud provider's `health_check()` fails or when running fully offline.
+The model + torch runtime are heavy (see the ``offline`` extra in
+pyproject.toml) and only install cleanly on Python 3.11/3.12, so everything
+is loaded lazily on first use inside a thread executor to keep the event
+loop unblocked. If torch/transformers are missing, ``translate`` raises
+``TranslationError("nllb_model_unavailable")`` instead of crashing -- the
+hybrid provider then surfaces a clear, non-fatal error.
+
+Language codes are resolved through the central registry (``languages.py``),
+so there are no hardcoded language-pair conditions here.
 """
 from __future__ import annotations
 
-from app.config import get_settings
+import asyncio
+
+import structlog
+
+from app.config import Settings, get_settings
 from app.models.schemas import TranslationSegment
-from app.services.translation.base import TranslationProvider
+from app.services.translation.base import TranslationError, TranslationProvider
+from app.services.translation.languages import nllb_code
+
+logger = structlog.get_logger(__name__)
 
 
 class NLLBTranslationProvider(TranslationProvider):
     name = "nllb"
 
-    def __init__(self) -> None:
-        self._settings = get_settings()
+    def __init__(self, settings: Settings | None = None) -> None:
+        self._settings = settings or get_settings()
         self._model = None
         self._tokenizer = None
+        self._load_lock = asyncio.Lock()
 
     async def warm_up(self) -> None:
-        # TODO: lazily load `self._settings.nllb_model_name` via transformers
-        # onto `self._settings.nllb_device`, run in a thread executor to
-        # avoid blocking the event loop.
-        raise NotImplementedError("NLLBTranslationProvider.warm_up is not yet implemented")
+        async with self._load_lock:
+            if self._model is None:
+                try:
+                    self._model, self._tokenizer = await asyncio.to_thread(
+                        self._load_model
+                    )
+                except ImportError as exc:
+                    raise TranslationError(
+                        "nllb_model_unavailable",
+                        "NLLB translation requires the `offline` extra "
+                        "(torch + transformers); install with `uv sync --extra offline`",
+                    ) from exc
+                except Exception as exc:
+                    raise TranslationError(
+                        "nllb_model_unavailable",
+                        f"Failed to load the NLLB model: {exc}",
+                    ) from exc
 
     async def translate(
         self,
@@ -36,4 +62,62 @@ class NLLBTranslationProvider(TranslationProvider):
         target_language: str,
         is_final: bool,
     ) -> TranslationSegment:
-        raise NotImplementedError("NLLBTranslationProvider.translate is not yet implemented")
+        if self._model is None:
+            await self.warm_up()
+        if self._model is None or self._tokenizer is None:
+            raise TranslationError(
+                "nllb_model_unavailable", "NLLB model failed to load"
+            )
+        # Resolve codes first so an unsupported language fails fast and clearly.
+        nllb_code(source_language)
+        nllb_code(target_language)
+
+        translated = await asyncio.to_thread(
+            self._translate_engine, text, source_language, target_language
+        )
+        return TranslationSegment(
+            segment_id=segment_id,
+            source_text=text,
+            translated_text=translated,
+            source_language=source_language,
+            target_language=target_language,
+            is_final=is_final,
+            provider=self.name,
+        )
+
+    # --- internal: heavy lifting, executed off the event loop --------------
+
+    def _load_model(self) -> tuple[object, object]:
+        """Import torch/transformers and load model + tokenizer (blocking)."""
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(self._settings.nllb_model_name)
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            self._settings.nllb_model_name
+        ).to(self._settings.nllb_device)
+        model.eval()
+        return model, tokenizer
+
+    def _translate_engine(
+        self, text: str, source_language: str, target_language: str
+    ) -> str:
+        """Generate the translation with the loaded model (blocking)."""
+        import torch
+
+        tokenizer = self._tokenizer
+        model = self._model
+        target_token = nllb_code(target_language)
+        inputs = tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self._settings.nllb_max_length,
+        )
+        with torch.inference_mode():
+            outputs = model.generate(
+                **inputs,
+                forced_bos_token_id=tokenizer.convert_tokens_to_ids(target_token),
+                max_length=self._settings.nllb_max_length,
+                num_beams=self._settings.nllb_num_beams,
+            )
+        return tokenizer.decode(outputs[0], skip_special_tokens=True)

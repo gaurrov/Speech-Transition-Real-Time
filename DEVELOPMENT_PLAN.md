@@ -79,13 +79,27 @@ what could and couldn't be executed in the authoring environment.
 `uv run pytest` all pass (see "Verification"). Manual microphone testing must
 still be run by a human in a real browser (see `docs/vad.md`).
 
-## Phase 2 — Translation + silence-driven finalization
+## Phase 2 — Translation + silence-driven finalization ✅ (this change)
 
-- [ ] Implement `CloudTranslationProvider.translate` against the selected
-      cloud API; implement `health_check`.
-- [ ] Add the hybrid router that picks cloud vs. NLLB based on
-      `health_check()` / config, sitting behind the same `TranslationProvider`
-      call site (no branching in the pipeline code).
+- [x] Implement `CloudTranslationProvider.translate` against the Google Cloud
+      Translation v2 REST API (plain httpx, no SDK); implement `health_check`
+      and `close`; error codes `cloud_config` / `cloud_connection` /
+      `cloud_translation_error`.
+- [x] Add the hybrid router (`HybridTranslationProvider`) behind the same
+      `TranslationProvider` call site (no branching in the pipeline code):
+      cloud first, NLLB-200 fallback per utterance on `TranslationError`;
+      both failing raises `translation_failed` (non-fatal for the session).
+- [x] Implement `NLLBTranslationProvider.warm_up`/`translate` (lazy model
+      load, thread-executor to avoid blocking the event loop, FLORES-200
+      codes via the central registry).
+- [x] Central language registry (`languages.py`): `iso_code`, `display_name`,
+      `cloud_code`, `nllb_code`; `register_language` /
+      `TRANSLATION_EXTRA_LANGUAGES` for extra languages; `auto` semantics
+      (cloud detects, NLLB rejects).
+- [x] Transport: per-session ordered translation queue/worker in
+      `translate_stream.py`; finals-only enqueue; `translation` +
+      `translation_ms` latency events; `translation_failed` error events are
+      non-fatal.
 - [x] Implement `SileroVADProvider` fully (Web Worker running the Silero ONNX
       model, fed by the AudioWorklet) and wire VAD lifecycle events →
       `vad_event` WS messages (Phase 1.5).
@@ -94,9 +108,21 @@ still be run by a human in a real browser (see `docs/vad.md`).
 - [x] Backend: consume `session.last_vad_event` (`silence_detected`) to drive
       that finalization.
 - [ ] Introduce a `PipelineOrchestrator` (backend) that owns per-session state
-      and coordinates ASR → translation, keeping `audio_stream.py` thin.
-- [ ] Frontend: populate `translation` state from `translation_partial/final`
-      events; verify both panels update in sync with acceptable latency.
+      and coordinates ASR → translation, keeping `translate_stream.py` thin.
+      (Current design keeps that logic on `Session` in `translate_stream.py`.)
+- [x] Frontend: populate `translation` state from `translation` events
+      (latest + history panels); `LatencyIndicator` shows the most specific
+      metric (`translation_ms` → `asr_ms` → `end_to_end_ms`);
+      `translation_failed` is treated as non-fatal.
+- [x] Tests: `test_languages.py`, `test_translation_providers.py` (cloud via
+      `httpx.MockTransport`, NLLB via monkeypatched engine, hybrid fallback,
+      factory modes), transport tests in `test_websocket.py` (finals-only,
+      in-order, per-session languages, non-fatal failure).
+
+**Exit criteria:** `uv run pytest` (74 passed), `uv run ruff check .`,
+`npm run typecheck` / `npm run lint` / `npm run build` all pass (see
+"Verification"). Real cloud + NLLB runs still require credentials / the
+`offline` extra (see `docs/translation.md`).
 
 ## Phase 3 — Async LLM refinement
 
@@ -113,15 +139,18 @@ still be run by a human in a real browser (see `docs/vad.md`).
 - [ ] Verify: artificially slow down the LLM call and confirm captions are
       never delayed waiting on it.
 
-## Phase 4 — Offline fallback + NLLB-200
+## Phase 4 — Offline fallback + NLLB-200 ✅ (implemented; manual load-test pending)
 
-- [ ] Implement `NLLBTranslationProvider.warm_up`/`translate` (lazy model
+- [x] Implement `NLLBTranslationProvider.warm_up`/`translate` (lazy model
       load, thread-executor to avoid blocking the event loop).
-- [ ] Add automatic failover: if `CloudTranslationProvider.health_check()`
-      fails N times, switch to NLLB for the session and surface a `status`
-      event to the UI ("Using offline translation").
+- [x] Automatic failover: `HybridTranslationProvider` falls back to NLLB per
+      utterance whenever the cloud provider raises `TranslationError`, and
+      reports the failure to the UI as a non-fatal `translation_failed`
+      error event. (Implemented as per-utterance fallback rather than a
+      session-level health-check switch.)
 - [ ] Load-test NLLB latency on target hardware; document expected latency
-      delta vs. cloud in `ARCHITECTURE.md`.
+      delta vs. cloud in `ARCHITECTURE.md`. Requires the `offline` extra on
+      Python 3.11/3.12 (see `docs/translation.md`).
 
 ## Phase 5 — Meeting/system audio ingestion
 
@@ -154,7 +183,7 @@ Actually executed on a Windows machine (Python 3.14, uv 0.11.8, Node 24/npm 11):
   VAD `SilenceDetector`).
 - Backend: `uv run ruff check .` — clean.
 - Backend: `uvicorn app.main:app` boots; `GET /health` returns
-  `{"status":"ok","env":"development","asr_provider":"deepgram","translation_provider":"cloud"}`.
+  `{"status":"ok","env":"development","asr_provider":"deepgram","translation_provider":"hybrid"}`.
 - Frontend: `npm install` succeeds; `npm run lint` and `npm run typecheck` are
   clean; `npm run build` produces a production bundle.
 - Frontend: `npm run dev` serves the UI shell at `http://localhost:5173` (HTTP 200).
@@ -195,3 +224,26 @@ Not yet verified: live ASR/translation (Phase 1+) — requires provider API keys
 - Not verified: live Deepgram audio — requires a real `DEEPGRAM_API_KEY`
   (add to `backend/.env`) and a browser mic; smoke-test English, Hindi, and a
   third language.
+
+## Verification performed for Phase 2 (hybrid translation)
+
+- Backend: `uv run pytest` — **74 tests pass** (health, config, websocket
+  transport, VAD, Deepgram provider, language registry, translation providers).
+  New suites: `test_languages.py` (registry mapping incl. FLORES-200 codes,
+  `auto` semantics, unknown-language rejection, runtime registration) and
+  `test_translation_providers.py` (cloud provider against `httpx.MockTransport`
+  — success/auto-source/connection-error/bad-status/malformed-body/no-key/
+  non-google-config; NLLB via monkeypatched `_load_model`/`_translate_engine`;
+  hybrid cloud-success/failover/both-fail; factory modes). Transport tests
+  verify finals-only translation, in-order delivery, per-session languages,
+  `translation_ms` latency, and non-fatal `translation_failed`.
+- Backend: `uv run ruff check .` — clean.
+- Frontend: `npm run typecheck`, `npm run lint`, `npm run build` all clean.
+  `LatencyIndicator` now shows the most specific metric (`translation_ms` →
+  `asr_ms` → `end_to_end_ms`); `translation_failed` errors no longer flip the
+  session into "error" state.
+- Not verified: a live Google Cloud Translation API key (add
+  `CLOUD_TRANSLATION_API_KEY` to `backend/.env`; fallback path exercises
+  without a key once `CLOUD_TRANSLATION_PROVIDER_NAME=google`), and a real
+  NLLB-200 model run — requires the `offline` extra on Python 3.11/3.12
+  (`uv sync --extra offline`).

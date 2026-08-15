@@ -46,12 +46,21 @@ class Settings(BaseSettings):
     deepgram_audio_buffer_seconds: float = 2.0  # in-flight audio kept across reconnects
 
     # --- Translation ---
-    # "cloud" is the default low-latency path; "nllb" is the offline/fallback path.
-    translation_provider: Literal["cloud", "nllb"] = "cloud"
+    # "hybrid" (default) tries the low-latency cloud provider first and falls
+    # back to NLLB-200 offline; "cloud"/"nllb" pin a single path.
+    translation_provider: Literal["hybrid", "cloud", "nllb"] = "hybrid"
     cloud_translation_api_key: str | None = None
     cloud_translation_provider_name: Literal["google", "deepl", "azure"] = "google"
+    # Google Cloud Translation v2 REST endpoint. Override for tests / proxies.
+    cloud_translation_endpoint: str = "https://translation.googleapis.com/language/translate/v2"
+    cloud_translation_timeout_sec: float = 5.0
+    # Extra languages registered into the central language registry at startup,
+    # e.g. [{"iso_code":"mr","display_name":"Marathi","nllb_code":"mar_Deva"}].
+    translation_extra_languages: list[dict] | None = None
     nllb_model_name: str = "facebook/nllb-200-distilled-600M"
     nllb_device: Literal["cpu", "cuda"] = "cpu"
+    nllb_max_length: int = 128
+    nllb_num_beams: int = 4
 
     # --- LLM (async post-processing / refinement) ---
     llm_refinement_enabled: bool = True

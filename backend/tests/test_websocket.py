@@ -4,22 +4,28 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models.schemas import TranscriptSegment
+from app.services.translation.base import TranslationError
 from app.websocket import translate_stream
 
 
 @pytest.fixture(autouse=True)
-def _use_fake_asr(fake_asr_factory):
-    """Isolate transport tests from the network: every session gets a fake ASR."""
-    return fake_asr_factory
+def _use_fakes(fake_asr_factory, fake_translation_factory):
+    """Isolate transport tests from the network: every session gets fake ASR + translation."""
+    return fake_asr_factory, fake_translation_factory
 
 
-def _configure(ws, session_id: str = "test-session") -> dict:
+def _configure(
+    ws,
+    session_id: str = "test-session",
+    source_language: str = "en",
+    target_language: str = "es",
+) -> dict:
     ws.send_json(
         {
             "type": "session_configuration",
             "session_id": session_id,
-            "source_language": "en",
-            "target_language": "es",
+            "source_language": source_language,
+            "target_language": target_language,
             "audio_source": "microphone",
             "sample_rate": 16_000,
             "encoding": "linear16",
@@ -214,6 +220,21 @@ def test_partial_and_final_transcripts_are_forwarded(
         assert latency["segment_id"] == "seg-0"
         assert latency["asr_ms"] == 180.0
 
+        translation = ws.receive_json()
+        assert translation["type"] == "translation"
+        assert translation["segment_id"] == "seg-0"
+        assert translation["source_text"] == "We need to discuss the project."
+        assert translation["translated_text"] == "[We need to discuss the project.]"
+        assert translation["source_language"] == "en"
+        assert translation["target_language"] == "es"
+        assert translation["is_final"] is True
+        assert translation["provider"] == "fake"
+
+        translation_latency = ws.receive_json()
+        assert translation_latency["type"] == "latency"
+        assert translation_latency["segment_id"] == "seg-0"
+        assert translation_latency["translation_ms"] >= 0
+
         ws.send_json({"type": "stop_session", "session_id": session_id})
         assert ws.receive_json()["type"] == "session_stopped"
 
@@ -278,6 +299,133 @@ def test_short_silence_does_not_send_endpointing_hint(fake_asr_factory) -> None:
         ws.send_json({"type": "stop_session", "session_id": "asr-nohint"})
         assert ws.receive_json()["type"] == "session_stopped"
         assert provider.silence_hints == []
+
+
+def _drain_until(ws, event_type: str, count: int, max_events: int = 30) -> list[dict]:
+    found = []
+    for _ in range(max_events):
+        event = ws.receive_json()
+        if event["type"] == event_type:
+            found.append(event)
+            if len(found) == count:
+                return found
+    raise AssertionError(f"saw only {len(found)}/{count} {event_type} events")
+
+
+def _stop_and_await(ws, session_id: str, max_events: int = 30) -> None:
+    ws.send_json({"type": "stop_session", "session_id": session_id})
+    for _ in range(max_events):
+        event = ws.receive_json()
+        if event["type"] == "session_stopped":
+            return
+    raise AssertionError("session_stopped never arrived")
+
+
+def test_partial_transcript_is_not_translated(
+    fake_asr_factory, fake_translation_factory
+) -> None:
+    session_id = "tr-partial"
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, session_id)
+        provider = fake_asr_factory[-1]
+        translator = fake_translation_factory[-1]
+
+        provider.script(
+            [
+                TranscriptSegment(
+                    segment_id="seg-0", text="Working draft", is_final=False
+                )
+            ]
+        )
+        first = ws.receive_json()
+        assert first["type"] == "partial_transcript"
+        assert first["text"] == "Working draft"
+
+        ws.send_json({"type": "stop_session", "session_id": session_id})
+        assert ws.receive_json()["type"] == "session_stopped"
+        assert translator.calls == []
+
+
+def test_finalized_utterances_translate_in_order(
+    fake_asr_factory, fake_translation_factory
+) -> None:
+    session_id = "tr-order"
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, session_id)
+        provider = fake_asr_factory[-1]
+        translator = fake_translation_factory[-1]
+
+        provider.script(
+            [
+                TranscriptSegment(
+                    segment_id="seg-1", text="First idea.", is_final=True
+                ),
+                TranscriptSegment(
+                    segment_id="seg-2", text="Second idea.", is_final=True
+                ),
+            ]
+        )
+        translations = _drain_until(ws, "translation", 2)
+        assert [t["segment_id"] for t in translations] == ["seg-1", "seg-2"]
+        assert [t["translated_text"] for t in translations] == [
+            "[First idea.]",
+            "[Second idea.]",
+        ]
+        assert [c["segment_id"] for c in translator.calls] == ["seg-1", "seg-2"]
+        assert translator.calls[0]["is_final"] is True
+
+        _stop_and_await(ws, session_id)
+        assert translator.closed is True
+
+
+def test_translation_uses_session_languages(
+    fake_asr_factory, fake_translation_factory
+) -> None:
+    session_id = "tr-lang"
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, session_id, source_language="hi", target_language="en")
+        provider = fake_asr_factory[-1]
+        translator = fake_translation_factory[-1]
+
+        provider.script(
+            [TranscriptSegment(segment_id="seg-0", text="नमस्ते", is_final=True)]
+        )
+        translation = _drain_until(ws, "translation", 1)[0]
+        assert translation["source_language"] == "hi"
+        assert translation["target_language"] == "en"
+        assert translator.calls[0]["source_language"] == "hi"
+        assert translator.calls[0]["target_language"] == "en"
+
+        _stop_and_await(ws, session_id)
+
+
+def test_translation_failure_is_non_fatal(
+    fake_asr_factory, fake_translation_factory
+) -> None:
+    session_id = "tr-fail"
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, session_id)
+        provider = fake_asr_factory[-1]
+        translator = fake_translation_factory[-1]
+        translator.fail_with = TranslationError("cloud_connection", "boom")
+        translator.fail_segment_ids = {"seg-1"}
+
+        provider.script(
+            [
+                TranscriptSegment(segment_id="seg-1", text="Broken.", is_final=True),
+                TranscriptSegment(segment_id="seg-2", text="Fine.", is_final=True),
+            ]
+        )
+        while True:
+            event = ws.receive_json()
+            if event["type"] == "error":
+                assert event["code"] == "translation_failed"
+                break
+        translations = _drain_until(ws, "translation", 1)
+        assert translations[0]["segment_id"] == "seg-2"
+        assert translations[0]["translated_text"] == "[Fine.]"
+
+        _stop_and_await(ws, session_id)
 
 
 def test_connect_args_include_language(fake_asr_factory) -> None:

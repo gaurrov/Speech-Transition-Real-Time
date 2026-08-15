@@ -115,19 +115,28 @@ testable against a fake server:
 translate(segment_id, text, source_language, target_language, is_final) -> TranslationSegment
 warm_up() -> None            # optional: load models / open connections
 health_check() -> bool       # optional: used by the hybrid router
+close() -> None              # optional: release HTTP clients / loaded models
 ```
 
-Two implementations:
-- `CloudTranslationProvider` — default. Wraps a cloud translation API
-  (Google / DeepL / Azure, selected via config) for lowest latency.
-- `NLLBTranslationProvider` — offline fallback using the NLLB-200 model,
-  used when the cloud provider's `health_check()` fails, when explicitly
-  configured for offline operation, or for languages the cloud provider
-  doesn't cover well.
+Three implementations, selected by the `translation_provider` setting:
 
-A thin **hybrid router** (planned in `DEVELOPMENT_PLAN.md` Phase 2) selects
-between them per request based on `health_check()` and configuration, so
-callers just call "the" `TranslationProvider`.
+- `CloudTranslationProvider` — primary, low-latency path. Talks to Google
+  Cloud Translation v2 REST directly with httpx (no SDK); endpoint and
+  timeout configurable. Failure codes: `cloud_config`, `cloud_connection`,
+  `cloud_translation_error`.
+- `NLLBTranslationProvider` — offline fallback using the NLLB-200
+  distilled-600M model. Loads lazily in a thread on first use; raises
+  `translation_failed`/`nllb_model_unavailable` if the runtime can't load it.
+- `HybridTranslationProvider` — default. Tries cloud first; on any
+  `TranslationError` it falls back to NLLB for that utterance. Both failing
+  raises `TranslationError("translation_failed")`. A transient cloud failure
+  therefore degrades one utterance instead of failing the meeting.
+
+Language codes are resolved centrally in `languages.py` (each `Language`:
+`iso_code`, `display_name`, `cloud_code`, `nllb_code` FLORES-200 token); the
+pipeline never branches on language pairs. `create_translation_provider()` in
+`translation/__init__.py` is the only entry point the transport uses. See
+`docs/translation.md` for the full design.
 
 ### `LLMProvider` (`backend/app/services/llm/base.py`)
 
@@ -296,9 +305,11 @@ are expected.
 | Client capture → WS send | < 20 ms |
 | ASR partial result | < 300 ms |
 | Translation (cloud) | < 150 ms |
+| Translation (NLLB fallback) | 1–3 s, only on cloud failure |
 | Total: speech → on-screen translation | < 500 ms |
 | LLM refinement (async, non-blocking) | 1–3 s, off critical path |
 
 These are targets to validate against. ASR latency is now actually measured
-(`asr_ms` per segment, surfaced via the `latency` WS event); translation and
-end-to-end targets will be validated once translation lands in Phase 2.
+(`asr_ms` per segment) and translation latency is measured too (`translation_ms`
+per segment, both surfaced via the `latency` WS event); end-to-end timing will
+be validated against these targets once live providers are wired in.

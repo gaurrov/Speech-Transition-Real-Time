@@ -162,6 +162,8 @@ export function useTranslatorSession({
         setBytesReceived(event.bytes)
         break
       case "error":
+        // A translation failure is non-fatal: the session keeps running.
+        if (event.code === "translation_failed") break
         setError(event.message)
         setStatus("error")
         break

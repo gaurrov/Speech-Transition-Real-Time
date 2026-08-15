@@ -14,7 +14,7 @@ def test_health_returns_ok() -> None:
     body = resp.json()
     assert body["status"] == "ok"
     assert body["asr_provider"] == "deepgram"
-    assert body["translation_provider"] == "cloud"
+    assert body["translation_provider"] == "hybrid"
 
 
 def test_health_returns_env() -> None:

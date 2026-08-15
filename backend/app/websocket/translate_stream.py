@@ -15,8 +15,11 @@ Per-session flow:
      an O(1) queue push -- so the event loop is never blocked by ASR I/O.
   3. Client ``vad_event`` messages are interpreted by ``SilenceDetector`` and
      turned into ``ASRProvider.notify_silence()`` endpointing hints.
-  4. ``stop_session`` / disconnect cancels the ASR task and closes the
-     provider.
+  4. Finalized utterances are queued to a per-session translation worker that
+     calls the configured ``TranslationProvider`` (hybrid: cloud -> NLLB
+     fallback) and streams ``TranslationEvent`` + ``translation_ms`` latency
+     back to the client. Partials are never translated.
+  5. ``stop_session`` / disconnect cancels both tasks and closes providers.
 """
 from __future__ import annotations
 
@@ -33,6 +36,8 @@ from app.config import Settings, get_settings
 from app.models import schemas
 from app.services.asr import create_asr_provider
 from app.services.asr.base import ASRProvider, ASRProviderError
+from app.services.translation import create_translation_provider
+from app.services.translation.base import TranslationError, TranslationProvider
 from app.services.vad.base import SilenceDetector
 
 logger = structlog.get_logger(__name__)
@@ -65,6 +70,9 @@ class Session:
         self.asr: ASRProvider | None = None
         self.asr_task: asyncio.Task[None] | None = None
         self.silence_detector: SilenceDetector | None = None
+        self.translator: TranslationProvider | None = None
+        self.translation_queue: asyncio.Queue[tuple[str, str]] | None = None
+        self.translation_task: asyncio.Task[None] | None = None
         self._send_lock = asyncio.Lock()
 
     @property
@@ -79,10 +87,37 @@ class Session:
             finalize_ms=self.settings.silence_finalize_ms,
             min_speech_ms=self.settings.silence_min_speech_ms,
         )
+        await self._teardown_providers()
         self.asr = create_asr_provider()
         self.asr_task = asyncio.create_task(
             self._run_asr(), name=f"asr-{self.session_id}"
         )
+        self.translator = create_translation_provider()
+        self.translation_queue = asyncio.Queue()
+        self.translation_task = asyncio.create_task(
+            self._run_translation(), name=f"translation-{self.session_id}"
+        )
+
+    async def _teardown_providers(self) -> None:
+        """Cancel/close any providers from a previous configuration (defensive)."""
+        for task in (self.asr_task, self.translation_task):
+            if task is not None and not task.done() and task is not asyncio.current_task():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    logger.debug("provider_task_cancel", session_id=self.session_id)
+        for provider in (self.asr, self.translator):
+            if provider is not None:
+                try:
+                    await provider.close()
+                except Exception:
+                    logger.debug("provider_close_failed", session_id=self.session_id)
+        self.asr = None
+        self.asr_task = None
+        self.translator = None
+        self.translation_queue = None
+        self.translation_task = None
 
     async def receive_audio(self, chunk: bytes) -> None:
         if not self.configured:
@@ -119,22 +154,23 @@ class Session:
         if self.state == "stopped":
             return
         self.state = "stopped"
-        task = self.asr_task
-        self.asr_task = None
         current = asyncio.current_task()
-        if task is not None and not task.done() and task is not current:
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                logger.debug("asr_task_cancel", session_id=self.session_id)
-        asr = self.asr
-        self.asr = None
-        if asr is not None:
-            try:
-                await asr.close()
-            except Exception:
-                logger.debug("asr_close_failed", session_id=self.session_id)
+        for attr in ("asr_task", "translation_task"):
+            task = getattr(self, attr)
+            setattr(self, attr, None)
+            if task is not None and not task.done() and task is not current:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    logger.debug("session_task_cancel", session_id=self.session_id)
+        for attr, provider in (("asr", self.asr), ("translator", self.translator)):
+            setattr(self, attr, None)
+            if provider is not None:
+                try:
+                    await provider.close()
+                except Exception:
+                    logger.debug("provider_close_failed", session_id=self.session_id)
         await self.send_event(
             schemas.SessionStoppedEvent(session_id=self.session_id, reason=reason)
         )
@@ -181,6 +217,10 @@ class Session:
                             asr_ms=round(segment.asr_latency_ms, 1),
                         )
                     )
+                # Only finalized, meaningful utterances are translated --
+                # partials stream straight to the client and never enqueue.
+                if segment.is_final and self.translation_queue is not None:
+                    self.translation_queue.put_nowait((segment.segment_id, segment.text))
         except asyncio.CancelledError:
             pass
         except ASRProviderError as exc:
@@ -197,6 +237,82 @@ class Session:
                     await asr.close()
                 except Exception:
                     logger.debug("asr_close_failed", session_id=self.session_id)
+
+    async def _run_translation(self) -> None:
+        """Translate finalized utterances in order and stream results to the client.
+
+        A single queue + worker per session keeps translation results in
+        utterance order. A translation failure is non-fatal: the error is
+        reported but the session (and all later utterances) keep going.
+        """
+        config = self.config
+        translator = self.translator
+        queue = self.translation_queue
+        if config is None or translator is None or queue is None:
+            return
+        while True:
+            segment_id, text = await queue.get()
+            started = time.monotonic()
+            try:
+                result = await translator.translate(
+                    segment_id=segment_id,
+                    text=text,
+                    source_language=config.source_language,
+                    target_language=config.target_language,
+                    is_final=True,
+                )
+            except asyncio.CancelledError:
+                raise
+            except TranslationError as exc:
+                logger.warning(
+                    "translation_failed",
+                    session_id=self.session_id,
+                    code=exc.code,
+                    message=exc.message,
+                )
+                await self.send_event(
+                    schemas.ErrorMessage(
+                        session_id=self.session_id,
+                        code="translation_failed",
+                        message=exc.message,
+                    )
+                )
+                continue
+            except Exception as exc:
+                logger.warning(
+                    "translation_failed",
+                    session_id=self.session_id,
+                    error=str(exc),
+                )
+                await self.send_event(
+                    schemas.ErrorMessage(
+                        session_id=self.session_id,
+                        code="translation_failed",
+                        message=str(exc),
+                    )
+                )
+                continue
+
+            translation_ms = round((time.monotonic() - started) * 1000, 1)
+            await self.send_event(
+                schemas.TranslationEvent(
+                    session_id=self.session_id,
+                    segment_id=result.segment_id,
+                    source_text=result.source_text,
+                    translated_text=result.translated_text,
+                    source_language=result.source_language,
+                    target_language=result.target_language,
+                    is_final=result.is_final,
+                    provider=result.provider,
+                )
+            )
+            await self.send_event(
+                schemas.LatencyEvent(
+                    session_id=self.session_id,
+                    segment_id=result.segment_id,
+                    translation_ms=translation_ms,
+                )
+            )
 
     async def send_event(self, event: schemas.ServerEvent) -> None:
         async with self._send_lock:

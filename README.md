@@ -5,15 +5,17 @@ Streams live speech to text, translates it, and displays translated captions wit
 minimal latency — with silence detection used to produce clean sentence boundaries
 and punctuation.
 
-> **Status:** client-side Silero VAD is implemented (Phase 1.5) and the backend
-> now streams live transcripts through **Deepgram streaming ASR** (Phase 1):
-> interim/final results, punctuation + smart formatting, multilingual /
-> language-detection, client-silence-driven utterance finalization, automatic
-> reconnects, and measured ASR latency. The backend boots, serves `/health`, and
-> passes 37 tests (transport + a Deepgram provider suite against a fake
-> Deepgram server); the frontend typechecks, lints, builds, and renders
-> real-time partial/final transcripts that freeze on finalization. Translation
-> and LLM refinement are the remaining build phases — see `DEVELOPMENT_PLAN.md`.
+> **Status:** the backend now streams live transcripts through **Deepgram
+> streaming ASR** (Phase 1) and translates finalized utterances through a
+> **hybrid cloud → NLLB-200 fallback** pipeline (Phase 2): interim/final
+> results, punctuation + smart formatting, multilingual / language-detection,
+> client-silence-driven utterance finalization, automatic reconnects, and
+> measured ASR **and** translation latency. The backend boots, serves
+> `/health`, and passes 74 tests (transport + Deepgram provider suite against
+> a fake server + language-registry/cloud/NLLB/hybrid provider suites); the
+> frontend typechecks, lints, builds, and renders real-time partial/final
+> transcripts that freeze on finalization, plus live translations.
+> LLM refinement remains — see `DEVELOPMENT_PLAN.md`.
 
 ## What this is
 
@@ -43,7 +45,8 @@ real-time-translator/
 ├── backend/           FastAPI + asyncio + WebSocket pipeline
 │   ├── app/             main.py, config.py, websocket/, services/ (asr,
 │   │                    translation, vad, llm), models/, utils/
-│   └── tests/           pytest suite (health, config, websocket, VAD)
+│   └── tests/           pytest suite (health, config, websocket, VAD,
+│                        Deepgram ASR, languages, translation providers)
 ├── docs/              Supplementary docs
 ├── tests/             Cross-cutting / integration tests (root level)
 ├── .env.example       All environment variables, documented
@@ -88,7 +91,7 @@ Verify it's up:
 
 ```bash
 curl http://localhost:8000/health
-# {"status":"ok","env":"development","asr_provider":"deepgram","translation_provider":"cloud"}
+# {"status":"ok","env":"development","asr_provider":"deepgram","translation_provider":"hybrid"}
 ```
 
 ### Frontend
