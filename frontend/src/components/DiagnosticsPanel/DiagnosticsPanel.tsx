@@ -13,6 +13,8 @@ export interface DiagnosticsPanelProps {
   vadError: string | null
   vadProbability: number | null
   vadSilenceThresholdMs: number
+  /** Async LLM refinement latency (ms), separate from the live path. */
+  refinementMs: number | null
 }
 
 function formatBytes(bytes: number): string {
@@ -55,6 +57,7 @@ export function DiagnosticsPanel({
   vadError,
   vadProbability,
   vadSilenceThresholdMs,
+  refinementMs,
 }: DiagnosticsPanelProps) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -78,6 +81,10 @@ export function DiagnosticsPanel({
           value={vadProbability !== null ? vadProbability.toFixed(3) : "—"}
         />
         <Row label="VAD silence threshold" value={`${vadSilenceThresholdMs} ms`} />
+        <Row
+          label="Refinement latency"
+          value={refinementMs !== null ? `${Math.round(refinementMs)} ms` : "—"}
+        />
       </dl>
     </section>
   )

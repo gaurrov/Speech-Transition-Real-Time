@@ -448,3 +448,161 @@ def test_connect_args_include_language(fake_asr_factory) -> None:
             "encoding": "linear16",
             "language": "hi",
         }
+
+
+# --- Async LLM refinement ---------------------------------------------------
+
+
+def test_refinement_is_dispatched_and_does_not_block_translation(
+    fake_asr_factory, fake_translation_factory, fake_llm_factory
+) -> None:
+    session_id = "ref-1"
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, session_id)
+        provider = fake_asr_factory[-1]
+        translator = fake_translation_factory[-1]
+        refiner = fake_llm_factory[-1]
+        # Slow the LLM down: the live translation must still arrive first.
+        refiner.delay = 0.2
+
+        provider.script(
+            [
+                TranscriptSegment(
+                    segment_id="seg-1", text="we need to deploy by friday", is_final=True
+                )
+            ]
+        )
+
+        events = []
+        for _ in range(40):
+            event = ws.receive_json()
+            events.append(event)
+            if event["type"] == "refined_transcript":
+                break
+
+        types = [event["type"] for event in events]
+        assert "final_transcript" in types
+        assert "translation" in types
+        assert types.index("translation") < types.index("refined_transcript")
+
+        translation = next(e for e in events if e["type"] == "translation")
+        assert translation["translated_text"] == "[we need to deploy by friday]"
+        assert translator.calls == [
+            {
+                "segment_id": "seg-1",
+                "text": "we need to deploy by friday",
+                "source_language": "en",
+                "target_language": "es",
+                "is_final": True,
+            }
+        ]
+
+        refined = next(e for e in events if e["type"] == "refined_transcript")
+        assert refined["segment_id"] == "seg-1"
+        assert refined["refined_text"] == "We need to deploy by friday"
+        assert refined["changed"] is True
+
+        # Refinement latency is reported separately, on its own latency event.
+        refinement_latencies = [
+            e for e in events if e.get("refinement_ms") is not None
+        ]
+        assert len(refinement_latencies) == 1
+        assert refinement_latencies[0]["segment_id"] == "seg-1"
+        assert refinement_latencies[0]["refinement_ms"] >= 0
+
+        _stop_and_await(ws, session_id)
+        assert refiner.closed is True
+
+
+def test_refinement_receives_rolling_context_window(
+    fake_asr_factory, fake_llm_factory
+) -> None:
+    session_id = "ref-ctx"
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, session_id)
+        provider = fake_asr_factory[-1]
+        refiner = fake_llm_factory[-1]
+
+        provider.script(
+            [
+                TranscriptSegment(segment_id="seg-1", text="first idea.", is_final=True),
+                TranscriptSegment(segment_id="seg-2", text="second idea.", is_final=True),
+            ]
+        )
+
+        seen = set()
+        for _ in range(40):
+            event = ws.receive_json()
+            if event["type"] == "refined_transcript":
+                seen.add(event["segment_id"])
+                if len(seen) == 2:
+                    break
+
+        assert refiner.calls[0]["segment_id"] == "seg-1"
+        assert refiner.calls[0]["context"] == []
+        assert refiner.calls[1]["segment_id"] == "seg-2"
+        assert refiner.calls[1]["context"] == ["first idea."]
+
+        _stop_and_await(ws, session_id)
+
+
+def test_refinement_failure_is_non_fatal_and_translation_continues(
+    fake_asr_factory, fake_llm_factory
+) -> None:
+    session_id = "ref-fail"
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, session_id)
+        provider = fake_asr_factory[-1]
+        refiner = fake_llm_factory[-1]
+        from app.services.llm.base import RefinementError
+
+        refiner.fail_with = RefinementError("llm_api_error", "boom")
+
+        provider.script(
+            [
+                TranscriptSegment(segment_id="seg-1", text="Broken.", is_final=True),
+                TranscriptSegment(segment_id="seg-2", text="Fine.", is_final=True),
+            ]
+        )
+
+        translations = _drain_until(ws, "translation", 2)
+        assert [t["segment_id"] for t in translations] == ["seg-1", "seg-2"]
+
+        # No refinement correction ever arrives; the session just keeps going.
+        saw_refined = False
+        ws.send_json({"type": "stop_session", "session_id": session_id})
+        for _ in range(30):
+            event = ws.receive_json()
+            if event["type"] == "refined_transcript":
+                saw_refined = True
+            if event["type"] == "session_stopped":
+                break
+        assert saw_refined is False
+        assert refiner.calls == [
+            {"segment_id": "seg-1", "text": "Broken.", "language": "en", "context": []},
+            {"segment_id": "seg-2", "text": "Fine.", "language": "en", "context": ["Broken."]},
+        ]
+
+
+def test_refinement_is_skipped_when_disabled(
+    monkeypatch, fake_asr_factory, fake_translation_factory
+) -> None:
+    session_id = "ref-off"
+    monkeypatch.setattr(translate_stream, "create_llm_provider", lambda: None)
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, session_id)
+        provider = fake_asr_factory[-1]
+        provider.script(
+            [TranscriptSegment(segment_id="seg-1", text="hello.", is_final=True)]
+        )
+
+        _drain_until(ws, "translation", 1)
+        saw_refined = False
+        ws.send_json({"type": "stop_session", "session_id": session_id})
+        for _ in range(30):
+            event = ws.receive_json()
+            if event["type"] == "refined_transcript":
+                saw_refined = True
+            if event["type"] == "session_stopped":
+                break
+        assert saw_refined is False

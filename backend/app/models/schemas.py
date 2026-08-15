@@ -172,6 +172,10 @@ class LatencyEvent(BaseModel):
     segment_id: str
     asr_ms: float | None = None
     translation_ms: float | None = None
+    # Refinement latency is measured separately from the live path: it is the
+    # time spent on the async LLM correction pass, which never gates the
+    # transcript/translation that reached the client first.
+    refinement_ms: float | None = None
     end_to_end_ms: float | None = None
 
 

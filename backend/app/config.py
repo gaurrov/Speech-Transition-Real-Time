@@ -11,7 +11,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     # --- General ---
@@ -63,10 +64,26 @@ class Settings(BaseSettings):
     nllb_num_beams: int = 4
 
     # --- LLM (async post-processing / refinement) ---
-    llm_refinement_enabled: bool = True
+    # Accepts either ENABLE_LLM_REFINEMENT (preferred) or the older
+    # LLM_REFINEMENT_ENABLED spelling.
+    llm_refinement_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "ENABLE_LLM_REFINEMENT", "LLM_REFINEMENT_ENABLED"
+        ),
+    )
     llm_provider: Literal["anthropic", "openai"] = "anthropic"
     llm_api_key: str | None = None
     llm_model: str = "claude-sonnet-4-6"
+    llm_max_tokens: int = 256
+    # How long one refinement call may take before it is abandoned. Refinement
+    # is off the hot path, so this is generous but still bounded.
+    llm_timeout_sec: float = 20.0
+    # How many preceding finalized segments are passed as context so
+    # terminology stays consistent across an utterance/meeting.
+    llm_context_segments: int = 4
+    # Override for proxies/tests; defaults to the provider's public endpoint.
+    llm_endpoint: str | None = None
 
     # --- VAD (server-side awareness of client-side Silero VAD events) ---
     silence_finalize_ms: int = 700  # silence duration that finalizes an utterance

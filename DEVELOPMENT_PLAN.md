@@ -124,20 +124,24 @@ still be run by a human in a real browser (see `docs/vad.md`).
 "Verification"). Real cloud + NLLB runs still require credentials / the
 `offline` extra (see `docs/translation.md`).
 
-## Phase 3 — Async LLM refinement
+## Phase 3 — Async LLM refinement ✅ (implemented)
 
-- [ ] Implement `LLMRefinementProvider.refine` with a tightly scoped prompt:
+- [x] Implement `LLMRefinementProvider.refine` with a tightly scoped prompt:
       fix punctuation/casing/obvious ASR errors and known terminology only —
-      never rephrase or change meaning.
-- [ ] Dispatch refinement as a fire-and-forget `asyncio.create_task` right
-      after a segment is finalized; never `await` it before responding to
-      the client.
-- [ ] Push `refinement` events to the client; update the on-screen segment
-      in place (with a subtle visual diff/highlight, then settle).
-- [ ] Add a short rolling context window (recent finalized segments) passed
+      never rephrase or change meaning. (Anthropic + OpenAI-compatible
+      endpoints via plain httpx; `RefinementError` codes for config,
+      connection, API and invalid-output failures.)
+- [x] Dispatch refinement as a fire-and-forget worker consuming an
+      `asyncio.Queue` (`put_nowait` right after a segment is finalized); never
+      `await` it before responding to the client.
+- [x] Push `refined_transcript` events to the client; update the on-screen
+      segment in place (with a subtle visual diff/highlight, then settle).
+- [x] Add a short rolling context window (recent finalized segments) passed
       into `refine()` for cross-segment terminology consistency.
-- [ ] Verify: artificially slow down the LLM call and confirm captions are
-      never delayed waiting on it.
+- [x] Verify: artificially slow down the LLM call and confirm captions are
+      never delayed waiting on it (non-blocking transport test + end-to-end
+      smoke with a stubbed Deepgram WS + stubbed LLM HTTP server, reporting
+      `refinement_ms` in the `latency` event).
 
 ## Phase 4 — Offline fallback + NLLB-200 ✅ (implemented; manual load-test pending)
 

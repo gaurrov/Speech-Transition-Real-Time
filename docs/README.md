@@ -18,3 +18,6 @@ Written so far:
 
 - `vad.md` — client-side Silero VAD: events, thresholds, model loading,
   browser compatibility, performance, manual test checklist.
+- `translation.md` — hybrid cloud → NLLB-200 translation fallback.
+- `refinement.md` — async LLM transcript refinement: prompt scope, config,
+  protocol, failure handling.

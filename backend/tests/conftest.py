@@ -7,8 +7,9 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from app.models.schemas import TranscriptSegment, TranslationSegment
+from app.models.schemas import RefinementResult, TranscriptSegment, TranslationSegment
 from app.services.asr.base import ASRProvider
+from app.services.llm.base import LLMProvider
 from app.services.translation.base import TranslationError, TranslationProvider
 
 
@@ -136,4 +137,67 @@ def fake_translation_factory(monkeypatch: pytest.MonkeyPatch):
         return provider
 
     monkeypatch.setattr(translate_stream, "create_translation_provider", factory)
+    return created
+
+
+class FakeLLMProvider(LLMProvider):
+    """
+    In-memory refinement provider used to exercise the transport's
+    non-blocking refinement worker.
+
+    By default it capitalizes finalized segments (a "changed" refinement);
+    tests can inject a delay (to prove translation is not gated on the LLM)
+    or a failure (to prove the session survives it).
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.fail_with: Exception | None = None
+        self.delay: float = 0.0
+        self.closed = False
+
+    async def refine(
+        self,
+        *,
+        segment_id: str,
+        text: str,
+        language: str,
+        context: list[str] | None = None,
+    ) -> RefinementResult:
+        self.calls.append(
+            {
+                "segment_id": segment_id,
+                "text": text,
+                "language": language,
+                "context": context,
+            }
+        )
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.fail_with is not None:
+            raise self.fail_with
+        refined = text.capitalize()
+        return RefinementResult(
+            segment_id=segment_id,
+            refined_text=refined,
+            changed=refined != text,
+        )
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def fake_llm_factory(monkeypatch: pytest.MonkeyPatch):
+    """Install FakeLLMProvider as the refinement factory."""
+    from app.websocket import translate_stream
+
+    created: list[FakeLLMProvider] = []
+
+    def factory() -> FakeLLMProvider:
+        provider = FakeLLMProvider()
+        created.append(provider)
+        return provider
+
+    monkeypatch.setattr(translate_stream, "create_llm_provider", factory)
     return created

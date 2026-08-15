@@ -11,12 +11,12 @@ and punctuation. It ships as a compact, always-on-top **desktop companion window
 > **hybrid cloud → NLLB-200 fallback** pipeline (Phase 2): interim/final
 > results, punctuation + smart formatting, multilingual / language-detection,
 > client-silence-driven utterance finalization, automatic reconnects, and
-> measured ASR **and** translation latency. The backend boots, serves
-> `/health`, and passes 74 tests (transport + Deepgram provider suite against
-> a fake server + language-registry/cloud/NLLB/hybrid provider suites); the
-> frontend typechecks, lints, builds, and renders real-time partial/final
-> transcripts that freeze on finalization, plus live translations.
-> LLM refinement remains — see `DEVELOPMENT_PLAN.md`.
+> measured ASR **and** translation **and** LLM-refinement latency. The backend
+> boots, serves `/health`, and passes 95 tests (transport + Deepgram provider
+> suite against a fake server + language-registry/cloud/NLLB/hybrid provider
+> suites + LLM refinement provider/transport suites); the frontend typechecks,
+> lints, builds, and renders real-time partial/final transcripts that freeze on
+> finalization, plus live translations and post-hoc refined transcripts.
 
 ## What this is
 

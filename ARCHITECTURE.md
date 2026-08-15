@@ -229,7 +229,7 @@ raw binary WebSocket messages rather than base64-encoded JSON.
 | Partial/final transcript | `{"type": "partial_transcript" \| "final_transcript", session_id, ...TranscriptEvent}` |
 | Translation | `{"type": "translation", session_id, ...TranslationEvent}` |
 | Async refinement | `{"type": "refined_transcript", session_id, segment_id, refined_text, changed}` |
-| Latency report | `{"type": "latency", session_id, segment_id, asr_ms, translation_ms, end_to_end_ms}` |
+| Latency report | `{"type": "latency", session_id, segment_id, asr_ms, translation_ms, refinement_ms?, end_to_end_ms}` |
 | Error | `{"type": "error", code, message, session_id?}` |
 | Session stopped | `{"type": "session_stopped", session_id, reason}` |
 
@@ -363,6 +363,8 @@ are expected.
 | LLM refinement (async, non-blocking) | 1–3 s, off critical path |
 
 These are targets to validate against. ASR latency is now actually measured
-(`asr_ms` per segment) and translation latency is measured too (`translation_ms`
-per segment, both surfaced via the `latency` WS event); end-to-end timing will
-be validated against these targets once live providers are wired in.
+(`asr_ms` per segment), translation latency is measured too (`translation_ms`
+per segment), and LLM refinement is measured separately (`refinement_ms`, sent
+in the `latency` event after every refinement attempt — success or failure);
+end-to-end timing will be validated against these targets once live providers
+are wired in.

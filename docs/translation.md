@@ -35,7 +35,7 @@ Rules that hold by design:
 - **Provider-specific codes are resolved centrally** (see below); the
   pipeline contains zero hardcoded language-pair conditionals.
 - **No LLM as translator.** The models are not used for translation; the LLM
-  is reserved for transcript refinement (see `docs/refinement.md` if present).
+  is reserved for transcript refinement (see `docs/refinement.md`).
 
 ## Provider modes
 

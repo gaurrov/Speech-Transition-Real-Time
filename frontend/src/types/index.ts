@@ -65,6 +65,8 @@ export interface LatencyReport {
   segment_id: string
   asr_ms?: number | null
   translation_ms?: number | null
+  /** Time spent on the async LLM refinement pass (separate from the live path). */
+  refinement_ms?: number | null
   end_to_end_ms?: number | null
 }
 

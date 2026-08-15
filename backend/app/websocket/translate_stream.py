@@ -36,6 +36,8 @@ from app.config import Settings, get_settings
 from app.models import schemas
 from app.services.asr import create_asr_provider
 from app.services.asr.base import ASRProvider, ASRProviderError
+from app.services.llm import create_llm_provider
+from app.services.llm.base import LLMProvider
 from app.services.translation import create_translation_provider
 from app.services.translation.base import TranslationError, TranslationProvider
 from app.services.vad.base import SilenceDetector
@@ -73,6 +75,16 @@ class Session:
         self.translator: TranslationProvider | None = None
         self.translation_queue: asyncio.Queue[tuple[str, str]] | None = None
         self.translation_task: asyncio.Task[None] | None = None
+        # Async LLM refinement: a separate, non-blocking worker that corrects
+        # finalized segments after the live caption/translation already
+        # reached the client. Never awaited on the hot path.
+        self.refiner: LLMProvider | None = None
+        self.refinement_queue: (
+            asyncio.Queue[tuple[str, str, str, list[str]]] | None
+        ) = None
+        self.refinement_task: asyncio.Task[None] | None = None
+        self.context_window: list[str] = []
+        self.refinement_context_size = 4
         self._send_lock = asyncio.Lock()
 
     @property
@@ -98,16 +110,28 @@ class Session:
             self._run_translation(), name=f"translation-{self.session_id}"
         )
 
+        self.refinement_context_size = max(0, self.settings.llm_context_segments)
+        self.context_window = []
+        self.refiner = create_llm_provider()
+        if self.refiner is not None:
+            self.refinement_queue = asyncio.Queue()
+            self.refinement_task = asyncio.create_task(
+                self._run_refinement(), name=f"refinement-{self.session_id}"
+            )
+        else:
+            self.refinement_queue = None
+            self.refinement_task = None
+
     async def _teardown_providers(self) -> None:
         """Cancel/close any providers from a previous configuration (defensive)."""
-        for task in (self.asr_task, self.translation_task):
+        for task in (self.asr_task, self.translation_task, self.refinement_task):
             if task is not None and not task.done() and task is not asyncio.current_task():
                 task.cancel()
                 try:
                     await task
                 except (asyncio.CancelledError, Exception):
                     logger.debug("provider_task_cancel", session_id=self.session_id)
-        for provider in (self.asr, self.translator):
+        for provider in (self.asr, self.translator, self.refiner):
             if provider is not None:
                 try:
                     await provider.close()
@@ -118,6 +142,10 @@ class Session:
         self.translator = None
         self.translation_queue = None
         self.translation_task = None
+        self.refiner = None
+        self.refinement_queue = None
+        self.refinement_task = None
+        self.context_window = []
 
     async def receive_audio(self, chunk: bytes) -> None:
         if not self.configured:
@@ -155,7 +183,7 @@ class Session:
             return
         self.state = "stopped"
         current = asyncio.current_task()
-        for attr in ("asr_task", "translation_task"):
+        for attr in ("asr_task", "translation_task", "refinement_task"):
             task = getattr(self, attr)
             setattr(self, attr, None)
             if task is not None and not task.done() and task is not current:
@@ -164,7 +192,11 @@ class Session:
                     await task
                 except (asyncio.CancelledError, Exception):
                     logger.debug("session_task_cancel", session_id=self.session_id)
-        for attr, provider in (("asr", self.asr), ("translator", self.translator)):
+        for attr, provider in (
+            ("asr", self.asr),
+            ("translator", self.translator),
+            ("refiner", self.refiner),
+        ):
             setattr(self, attr, None)
             if provider is not None:
                 try:
@@ -221,6 +253,23 @@ class Session:
                 # partials stream straight to the client and never enqueue.
                 if segment.is_final and self.translation_queue is not None:
                     self.translation_queue.put_nowait((segment.segment_id, segment.text))
+
+                # Async LLM refinement: enqueue right after finalization, but
+                # NEVER await the result before the final transcript/translation
+                # events have already been sent above. A rolling window of prior
+                # finalized segments is captured as context.
+                if (
+                    segment.is_final
+                    and self.refinement_queue is not None
+                    and self.refiner is not None
+                ):
+                    context = list(self.context_window)
+                    self.refinement_queue.put_nowait(
+                        (segment.segment_id, segment.text, config.source_language, context)
+                    )
+                    self.context_window.append(segment.text)
+                    if len(self.context_window) > self.refinement_context_size:
+                        self.context_window = self.context_window[-self.refinement_context_size:]
         except asyncio.CancelledError:
             pass
         except ASRProviderError as exc:
@@ -313,6 +362,59 @@ class Session:
                     translation_ms=translation_ms,
                 )
             )
+
+    async def _run_refinement(self) -> None:
+        """Correct finalized segments in the background, never blocking anything.
+
+        Runs as its own task with its own queue, fully independent of the ASR
+        and translation tasks. A failure (timeout, API error, invalid output)
+        is logged and the original transcript/translation is kept as-is -- the
+        live captioning path never notices.
+        """
+        queue = self.refinement_queue
+        refiner = self.refiner
+        if queue is None or refiner is None:
+            return
+        while True:
+            segment_id, text, language, context = await queue.get()
+            started = time.monotonic()
+            result = None
+            try:
+                result = await refiner.refine(
+                    segment_id=segment_id,
+                    text=text,
+                    language=language,
+                    context=context,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "refinement_failed",
+                    session_id=self.session_id,
+                    segment_id=segment_id,
+                    error=str(exc),
+                )
+            finally:
+                # Refinement latency is reported separately from the live path,
+                # even when the attempt itself failed.
+                refinement_ms = round((time.monotonic() - started) * 1000, 1)
+                await self.send_event(
+                    schemas.LatencyEvent(
+                        session_id=self.session_id,
+                        segment_id=segment_id,
+                        refinement_ms=refinement_ms,
+                    )
+                )
+            if result is not None and result.changed:
+                await self.send_event(
+                    schemas.RefinedTranscriptEvent(
+                        session_id=self.session_id,
+                        segment_id=segment_id,
+                        refined_text=result.refined_text,
+                        changed=True,
+                    )
+                )
 
     async def send_event(self, event: schemas.ServerEvent) -> None:
         async with self._send_lock:
