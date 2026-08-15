@@ -212,6 +212,9 @@ class TranscriptSegment(BaseModel):
     start_ms: int | None = None
     end_ms: int | None = None
     confidence: float | None = None
+    # Internal metric: ms from backend audio receipt to this ASR result.
+    # Serialized to the client only via the separate `latency` event.
+    asr_latency_ms: float | None = None
 
 
 class TranslationSegment(BaseModel):

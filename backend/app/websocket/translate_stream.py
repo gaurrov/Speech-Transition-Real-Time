@@ -1,20 +1,22 @@
 """
-WebSocket endpoint for the live audio -> transcript -> translation pipeline.
+WebSocket endpoint for the live audio -> transcript pipeline.
 
 The transport layer owns the connection: it accepts sockets, validates and
-routes client control messages, and manages per-session lifecycle. Real ASR /
-translation providers are not wired in yet (see DEVELOPMENT_PLAN.md), so this
-transport currently does two things:
+routes client control messages, and manages per-session lifecycle. It never
+talks to Deepgram directly -- all ASR happens behind the `ASRProvider`
+interface (`app/services/asr/base.py`), so this file stays provider-agnostic.
 
-1. Accepts the audio stream and tracks how much real audio arrived
-   (chunks/bytes/seconds), confirming progress to the client with a
-   throttled ``audio_received`` event so the browser -> backend audio path is
-   observable end to end.
-2. Maintains the session registry and lifecycle (start/stop) contracts.
-
-No transcripts or translations are produced or faked at this stage. The event
-loop is never blocked: audio handling is O(1) bookkeeping and every network
-write is guarded by a per-session lock.
+Per-session flow:
+  1. ``session_configuration`` creates the configured ``ASRProvider`` and
+     starts a background task that connects upstream and streams
+     ``TranscriptSegment`` events back to the client (partial immediately,
+     final when the provider finalizes an utterance).
+  2. Binary audio frames are forwarded to the provider's ``send_audio`` --
+     an O(1) queue push -- so the event loop is never blocked by ASR I/O.
+  3. Client ``vad_event`` messages are interpreted by ``SilenceDetector`` and
+     turned into ``ASRProvider.notify_silence()`` endpointing hints.
+  4. ``stop_session`` / disconnect cancels the ASR task and closes the
+     provider.
 """
 from __future__ import annotations
 
@@ -29,6 +31,9 @@ from pydantic import ValidationError
 
 from app.config import Settings, get_settings
 from app.models import schemas
+from app.services.asr import create_asr_provider
+from app.services.asr.base import ASRProvider, ASRProviderError
+from app.services.vad.base import SilenceDetector
 
 logger = structlog.get_logger(__name__)
 
@@ -56,6 +61,10 @@ class Session:
         self.last_ack_at = 0.0
         self.bytes_per_second = 32000.0
         self.last_vad_event: schemas.VADEventMessage | None = None
+        self.speech_started_at_ms: int | None = None
+        self.asr: ASRProvider | None = None
+        self.asr_task: asyncio.Task[None] | None = None
+        self.silence_detector: SilenceDetector | None = None
         self._send_lock = asyncio.Lock()
 
     @property
@@ -66,6 +75,14 @@ class Session:
         self.config = config
         self.state = "configured"
         self.bytes_per_second = self._bytes_per_second(config)
+        self.silence_detector = SilenceDetector(
+            finalize_ms=self.settings.silence_finalize_ms,
+            min_speech_ms=self.settings.silence_min_speech_ms,
+        )
+        self.asr = create_asr_provider()
+        self.asr_task = asyncio.create_task(
+            self._run_asr(), name=f"asr-{self.session_id}"
+        )
 
     async def receive_audio(self, chunk: bytes) -> None:
         if not self.configured:
@@ -76,6 +93,9 @@ class Session:
         self.received_bytes += len(chunk)
         self.audio_seconds += len(chunk) / self.bytes_per_second
         self.last_audio_at = now
+
+        if self.asr is not None:
+            await self.asr.send_audio(chunk)
 
         if now - self.last_ack_at >= _AUDIO_ACK_INTERVAL_MS / 1000:
             self.last_ack_at = now
@@ -99,9 +119,84 @@ class Session:
         if self.state == "stopped":
             return
         self.state = "stopped"
+        task = self.asr_task
+        self.asr_task = None
+        current = asyncio.current_task()
+        if task is not None and not task.done() and task is not current:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                logger.debug("asr_task_cancel", session_id=self.session_id)
+        asr = self.asr
+        self.asr = None
+        if asr is not None:
+            try:
+                await asr.close()
+            except Exception:
+                logger.debug("asr_close_failed", session_id=self.session_id)
         await self.send_event(
             schemas.SessionStoppedEvent(session_id=self.session_id, reason=reason)
         )
+
+    async def _run_asr(self) -> None:
+        """Connect the ASR provider and stream transcript events to the client."""
+        config = self.config
+        if config is None or self.asr is None:
+            return
+        try:
+            await self.asr.connect(
+                sample_rate=config.sample_rate,
+                encoding=config.encoding,
+                language=config.source_language,
+            )
+        except ASRProviderError as exc:
+            await self.send_event(
+                schemas.ErrorMessage(
+                    session_id=self.session_id, code=exc.code, message=exc.message
+                )
+            )
+            await self.stop(reason="asr_error")
+            return
+
+        try:
+            async for segment in self.asr.stream():
+                await self.send_event(
+                    schemas.TranscriptEvent(
+                        type="final_transcript" if segment.is_final else "partial_transcript",
+                        session_id=self.session_id,
+                        segment_id=segment.segment_id,
+                        text=segment.text,
+                        is_final=segment.is_final,
+                        start_ms=segment.start_ms,
+                        end_ms=segment.end_ms,
+                        confidence=segment.confidence,
+                    )
+                )
+                if segment.asr_latency_ms is not None:
+                    await self.send_event(
+                        schemas.LatencyEvent(
+                            session_id=self.session_id,
+                            segment_id=segment.segment_id,
+                            asr_ms=round(segment.asr_latency_ms, 1),
+                        )
+                    )
+        except asyncio.CancelledError:
+            pass
+        except ASRProviderError as exc:
+            await self.send_event(
+                schemas.ErrorMessage(
+                    session_id=self.session_id, code=exc.code, message=exc.message
+                )
+            )
+            await self.stop(reason="asr_error")
+        finally:
+            asr = self.asr
+            if asr is not None:
+                try:
+                    await asr.close()
+                except Exception:
+                    logger.debug("asr_close_failed", session_id=self.session_id)
 
     async def send_event(self, event: schemas.ServerEvent) -> None:
         async with self._send_lock:
@@ -281,6 +376,9 @@ async def _handle_vad_event(
         await _send_error(websocket, "no_active_session", "No matching session on this connection")
         return
 
+    if message.event == "speech_started":
+        current.speech_started_at_ms = message.timestamp_ms
+
     # Stash the latest transition so utterance finalization can use the last
     # measured silence gap (duration_ms on silence_detected).
     current.last_vad_event = message
@@ -291,6 +389,22 @@ async def _handle_vad_event(
         timestamp_ms=message.timestamp_ms,
         duration_ms=message.duration_ms,
     )
+
+    # A client-detected silence boundary becomes an endpointing hint for the
+    # ASR provider (Deepgram "Finalize"), but only when the gap is significant
+    # enough per server-side SilenceDetector policy.
+    if message.event == "silence_detected" and current.asr is not None:
+        detector = current.silence_detector
+        duration_ms = message.duration_ms or 0
+        if detector is not None:
+            if current.speech_started_at_ms is not None:
+                speech_ms = max(0, message.timestamp_ms - current.speech_started_at_ms)
+            else:
+                speech_ms = current.settings.silence_min_speech_ms + 1
+            if detector.should_finalize(
+                silence_duration_ms=duration_ms, speech_duration_ms=speech_ms
+            ):
+                await current.asr.notify_silence(duration_ms)
 
 
 async def _handle_text_message(
@@ -339,7 +453,8 @@ async def translate_stream(websocket: WebSocket) -> None:
         - JSON {"type": "stop_session", "session_id": str}
       Server -> Client (all JSON envelopes):
         - session_started / audio_received / error / session_stopped
-        (transcript/translation events appear once ASR is wired in)
+        - partial_transcript / final_transcript (streamed ASR results)
+        - latency (per-segment asr_ms timing)
     """
     await websocket.accept()
     session: Session | None = None
@@ -376,5 +491,6 @@ async def translate_stream(websocket: WebSocket) -> None:
         await _send_error(websocket, "internal_error", str(exc))
     finally:
         if session is not None:
+            await session.stop(reason="connection_closed")
             session_manager.remove(session.session_id)
             logger.info("ws_session_ended", session_id=session.session_id, reason="connection_closed")

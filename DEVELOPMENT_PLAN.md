@@ -32,21 +32,29 @@ what could and couldn't be executed in the authoring environment.
 
 ## Phase 1 — Live transcription (ASR only, no translation yet)
 
-- [ ] Implement `DeepgramASRProvider.connect/send_audio/stream/close` against
+- [x] Implement `DeepgramASRProvider.connect/send_audio/stream/close` against
       the real Deepgram streaming API (interim + final results, punctuation,
-      smart formatting).
-- [ ] Implement `useAudioCapture`: `getUserMedia` → `AudioWorkletProcessor` that
+      smart formatting), using the `websockets` library directly for full
+      control over reconnects, timeouts, and malformed-response handling.
+- [x] Implement `useAudioCapture`: `getUserMedia` → `AudioWorkletProcessor` that
       resamples to 16kHz PCM16 and posts frames to the main thread.
-- [ ] Implement a minimal `pcm-capture-processor.js` AudioWorklet module
+- [x] Implement a minimal `pcm-capture-processor.js` AudioWorklet module
       (`frontend/public/worklets/`).
-- [ ] Wire `useTranslatorSession.start()` to open a `TranslatorClient`, send
+- [x] Wire `useTranslatorSession.start()` to open a `TranslatorClient`, send
       `start`, stream audio frames, and populate `transcript` from
-      `transcript_partial`/`transcript_final` events.
-- [ ] Backend: flesh out `audio_stream.py` to parse `start`, instantiate the
+      `partial_transcript`/`final_transcript` events.
+- [x] Backend: flesh out `translate_stream.py` to parse `start`, instantiate the
       configured `ASRProvider`, forward binary frames to `send_audio`, and
-      stream `TranscriptSegment`s back as WS events.
-- [ ] Manual test: speak into the mic, see live captions in the Transcript
-      panel with reasonable latency.
+      stream `TranscriptSegment`s back as WS events (partials immediately,
+      finals on utterance end).
+- [x] Backend: client-side VAD `silence_detected` events drive
+      `ASRProvider.notify_silence` → a Deepgram `Finalize` control for clean
+      utterance boundaries (see `docs/vad.md` and Phase 2 notes below).
+- [x] Backend: measure and report audio→ASR latency (`asr_ms` in the `latency`
+      WS event), surfaced in the UI's latency indicator.
+- [ ] Manual test: speak into the mic with a real `DEEPGRAM_API_KEY`, see live
+      captions in the Transcript panel with reasonable latency (English, Hindi,
+      and a third language for the multilingual path).
 
 ## Phase 1.5 — Client-side Silero VAD ✅ (this change)
 
@@ -81,9 +89,9 @@ still be run by a human in a real browser (see `docs/vad.md`).
 - [x] Implement `SileroVADProvider` fully (Web Worker running the Silero ONNX
       model, fed by the AudioWorklet) and wire VAD lifecycle events →
       `vad_event` WS messages (Phase 1.5).
-- [ ] Backend: use `SilenceDetector` + `ASRProvider.notify_silence` to force
+- [x] Backend: use `SilenceDetector` + `ASRProvider.notify_silence` to force
       clean utterance boundaries; verify punctuation/finalization improves.
-- [ ] Backend: consume `session.last_vad_event` (`silence_detected`) to drive
+- [x] Backend: consume `session.last_vad_event` (`silence_detected`) to drive
       that finalization.
 - [ ] Introduce a `PipelineOrchestrator` (backend) that owns per-session state
       and coordinates ASR → translation, keeping `audio_stream.py` thin.
@@ -168,3 +176,22 @@ Not yet verified: live ASR/translation (Phase 1+) — requires provider API keys
   (1452/1875 windows ≥ 0.5 on the reference test clip).
 - Not verified: real-browser microphone capture and WASM loading in the
   worker — requires a human with a mic (checklist in `docs/vad.md`).
+
+## Verification performed for Phase 1 (Deepgram streaming ASR)
+
+- Backend: `uv run pytest` — **37 tests pass** (health, config, websocket
+  transport, VAD, Deepgram provider). The ASR provider is tested against a
+  local `FakeDeepgramServer` (no real API needed): partial→final mapping with
+  stable segment ids, duplicate/empty-final dedup, malformed-message handling,
+  `Finalize` control from `notify_silence`, per-language query params
+  (en/hi/es) + `Authorization: Token` header, multilingual/language-detection
+  for "auto", config/auth/server-error failure codes, reconnect-after-drop with
+  backoff, and connection-refused handling. Transport tests verify partial/final
+  forwarding, audio forwarding, latency events, and silence→endpointing hints.
+- Backend: `uv run ruff check .` — clean.
+- Frontend: `npm run typecheck`, `npm run lint`, `npm run build` all clean.
+  On a final transcript the panel freezes the final line and clears the partial
+  area for the next utterance; `asr_ms` latency is shown in the indicator.
+- Not verified: live Deepgram audio — requires a real `DEEPGRAM_API_KEY`
+  (add to `backend/.env`) and a browser mic; smoke-test English, Hindi, and a
+  third language.

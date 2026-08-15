@@ -31,6 +31,19 @@ class Settings(BaseSettings):
     asr_provider: Literal["deepgram"] = "deepgram"
     deepgram_api_key: str | None = None
     deepgram_model: str = "nova-2"
+    # Base websocket endpoint for streaming listen (override for tests / proxies).
+    deepgram_endpoint: str = "wss://api.deepgram.com/v1/listen"
+    deepgram_interim_results: bool = True
+    deepgram_endpointing_ms: int = 600  # silence (ms) after which Deepgram finalizes an utterance
+    deepgram_utterance_end_ms: int = 900  # utterance_end marker (>= endpointing)
+    deepgram_punctuate: bool = True
+    deepgram_smart_format: bool = True
+    deepgram_language_detection: bool = True  # used when source_language == "auto"
+    deepgram_connect_timeout_sec: float = 10.0
+    deepgram_send_timeout_sec: float = 5.0
+    deepgram_reconnect_max_attempts: int = 3
+    deepgram_reconnect_base_delay_ms: int = 500
+    deepgram_audio_buffer_seconds: float = 2.0  # in-flight audio kept across reconnects
 
     # --- Translation ---
     # "cloud" is the default low-latency path; "nllb" is the offline/fallback path.

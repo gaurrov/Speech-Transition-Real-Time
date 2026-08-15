@@ -50,4 +50,20 @@ class ASRProvider(ABC):
         """Close the upstream connection and release resources."""
 
 
+class ASRProviderError(Exception):
+    """
+    Recoverable-vs-not distinction for callers.
+
+    ``code`` is a stable machine-readable string (e.g. ``deepgram_auth``,
+    ``deepgram_connection``, ``deepgram_timeout``, ``deepgram_error``,
+    ``deepgram_config``) that the transport layer can surface as a typed
+    ``error`` event without knowing Deepgram internals.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 ASRProviderFactory = Callable[[], Awaitable[ASRProvider]]

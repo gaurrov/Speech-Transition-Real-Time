@@ -5,13 +5,15 @@ Streams live speech to text, translates it, and displays translated captions wit
 minimal latency — with silence detection used to produce clean sentence boundaries
 and punctuation.
 
-> **Status:** scaffold complete and verified; client-side Silero VAD is
-> implemented (Phase 1.5). The backend boots, serves `/health`, and passes its
-> tests (including `vad_event` transport tests). The frontend boots, builds, and
-> renders the UI with a working ● Speaking / ○ Silence detected indicator driven
-> by the Silero VAD v5 model running in a Web Worker. Concrete provider
-> implementations for ASR/translation/LLM are the remaining build phases — see
-> `DEVELOPMENT_PLAN.md`.
+> **Status:** client-side Silero VAD is implemented (Phase 1.5) and the backend
+> now streams live transcripts through **Deepgram streaming ASR** (Phase 1):
+> interim/final results, punctuation + smart formatting, multilingual /
+> language-detection, client-silence-driven utterance finalization, automatic
+> reconnects, and measured ASR latency. The backend boots, serves `/health`, and
+> passes 37 tests (transport + a Deepgram provider suite against a fake
+> Deepgram server); the frontend typechecks, lints, builds, and renders
+> real-time partial/final transcripts that freeze on finalization. Translation
+> and LLM refinement are the remaining build phases — see `DEVELOPMENT_PLAN.md`.
 
 ## What this is
 

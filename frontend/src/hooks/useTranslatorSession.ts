@@ -123,7 +123,7 @@ export function useTranslatorSession({
           segment,
         ])
         setPartialText("")
-        setStatus("translating")
+        setStatus("listening")
         break
       }
       case "translation": {

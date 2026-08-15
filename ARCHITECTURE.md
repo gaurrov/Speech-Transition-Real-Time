@@ -86,6 +86,29 @@ close() -> None
 Deepgram's endpointing/finalize controls, letting client-detected silence force
 a clean utterance boundary rather than waiting on server-side heuristics alone.
 
+It talks to Deepgram's `/v1/listen` WebSocket directly (via `websockets`, not
+the SDK) so the failure/backoff behavior is fully under our control and is
+testable against a fake server:
+
+- `connect()` never blocks on the network. It spawns a **reader** task (owns
+  the connection, reconnects with exponential backoff, base
+  `deepgram_reconnect_base_delay_ms`, capped at `deepgram_reconnect_max_attempts`)
+  and a **sender** task that drains a bounded audio queue, so streaming audio
+  in never back-pressures the browser → backend WebSocket (oldest frames are
+  dropped on overflow during a reconnect).
+- `partial_transcript` results are forwarded the moment they arrive; finals are
+  emitted on utterance end (Deepgram endpointing / `Finalize` / `UtteranceEnd`).
+  Empty finals and duplicate finals are dropped; segment ids are stable
+  (`<uid>-<n>`) so the UI can update a partial in place and freeze it on final.
+- Failure codes (`ASRProviderError.code`): `deepgram_config` (missing API key),
+  `deepgram_auth` (HTTP 401/403 or Error message), `deepgram_connection`
+  (unreachable after retries), `deepgram_error` (Deepgram `Error` message),
+  `deepgram_closed`. A fatal error surfaces once on `stream()` and tears down
+  the session.
+- `asr_latency_ms` on each `TranscriptSegment` estimates audio-received →
+  ASR-result latency by interpolating the streaming timeline; the transport
+  surfaces it as the `asr_ms` field of a `latency` WS event.
+
 ### `TranslationProvider` (`backend/app/services/translation/base.py`)
 
 ```
@@ -276,5 +299,6 @@ are expected.
 | Total: speech → on-screen translation | < 500 ms |
 | LLM refinement (async, non-blocking) | 1–3 s, off critical path |
 
-These are targets to validate against once providers are implemented, not
-measured results.
+These are targets to validate against. ASR latency is now actually measured
+(`asr_ms` per segment, surfaced via the `latency` WS event); translation and
+end-to-end targets will be validated once translation lands in Phase 2.
