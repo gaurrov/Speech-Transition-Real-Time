@@ -1,29 +1,39 @@
-import { useCallback, useEffect, useState } from "react"
-import { AudioControls } from "./components/AudioControls"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { CompactHeader } from "./components/CompactHeader"
+import { CompactPanel } from "./components/CompactPanel"
 import { DiagnosticsPanel } from "./components/DiagnosticsPanel"
 import { ErrorBanner } from "./components/ErrorBanner"
-import { Header } from "./components/Header"
-import { LanguageControls } from "./components/LanguageControls"
+import { LanguageBar } from "./components/LanguageBar"
+import { LatencyIndicator } from "./components/LatencyIndicator"
+import { ListeningControls } from "./components/ListeningControls"
 import { SettingsModal } from "./components/SettingsModal"
-import { TranscriptPanel } from "./components/TranscriptPanel"
-import { TranslationPanel } from "./components/TranslationPanel"
-import { AUDIO_SOURCES } from "./config/audioSources"
+import { TranscriptView } from "./components/TranscriptView"
+import { TranslationView } from "./components/TranslationView"
+import { statusMeta } from "./components/status"
 import { LANGUAGES, SOURCE_LANGUAGES } from "./config/languages"
+import { loadPreferences, savePreferences } from "./config/preferences"
 import { useAudioCapture } from "./hooks/useAudioCapture"
 import { useTranslatorSession } from "./hooks/useTranslatorSession"
 import { DEFAULT_VAD_CONFIG } from "./providers/vad/types"
-import type { SessionMode } from "./types"
+import type { SessionMode, WindowMode } from "./types"
 
-const DEFAULT_TARGET_LANGUAGE = "es"
+const AUDIO_SOURCE = "microphone"
+
+function shortCode(code: string): string {
+  return code === "auto" ? "AUTO" : code.toUpperCase()
+}
 
 export default function App() {
-  const [sourceLanguage, setSourceLanguage] = useState("auto")
-  const [targetLanguage, setTargetLanguage] = useState(DEFAULT_TARGET_LANGUAGE)
-  const [audioSource, setAudioSource] = useState("microphone")
-  const [mode, setMode] = useState<SessionMode>("mock")
+  const prefsRef = useRef(loadPreferences())
+
+  const [sourceLanguage, setSourceLanguage] = useState(prefsRef.current.sourceLanguage)
+  const [targetLanguage, setTargetLanguage] = useState(prefsRef.current.targetLanguage)
+  const [windowMode, setWindowMode] = useState<WindowMode>(prefsRef.current.windowMode)
+  const [mode, setMode] = useState<SessionMode>(prefsRef.current.sessionMode)
   const [isRunning, setIsRunning] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [showLatency, setShowLatency] = useState(import.meta.env.DEV)
+  const [pinned, setPinned] = useState(true)
   const [vadSilenceThresholdMs, setVadSilenceThresholdMs] = useState(
     DEFAULT_VAD_CONFIG.silenceThresholdMs,
   )
@@ -45,11 +55,29 @@ export default function App() {
   const { setVADConfig } = capture
   const speaking = capture.activityAvailable && capture.isSpeaking
 
-  // The worklet's RMS check is only a fallback until the Silero VAD model is
-  // ready; once ready, VAD lifecycle events drive the status instead.
+  const inElectron = window.desktop?.isElectron === true
+
   useEffect(() => {
     if (!capture.vadReady) setSpeaking(speaking)
   }, [capture.vadReady, speaking, setSpeaking])
+
+  // Persist user choices so the companion window reopens in the same state.
+  useEffect(() => {
+    savePreferences({
+      sourceLanguage,
+      targetLanguage,
+      windowMode,
+      sessionMode: mode,
+    })
+  }, [sourceLanguage, targetLanguage, windowMode, mode])
+
+  // Keep the pin button in sync with the OS window state.
+  useEffect(() => {
+    if (!window.desktop) return
+    void window.desktop.isAlwaysOnTop().then(setPinned)
+    const unsubscribe = window.desktop.onAlwaysOnTopChanged(setPinned)
+    return unsubscribe
+  }, [])
 
   const handleStart = useCallback(async () => {
     const micOk = await capture.start()
@@ -58,12 +86,12 @@ export default function App() {
       session_id: crypto.randomUUID(),
       source_language: sourceLanguage,
       target_language: targetLanguage,
-      audio_source: audioSource,
+      audio_source: AUDIO_SOURCE,
       sample_rate: 16_000,
       encoding: "linear16",
     })
     setIsRunning(true)
-  }, [capture, session, sourceLanguage, targetLanguage, audioSource])
+  }, [capture, session, sourceLanguage, targetLanguage])
 
   const handleStop = useCallback(() => {
     session.stop()
@@ -100,24 +128,42 @@ export default function App() {
     [setVADConfig],
   )
 
+  const handleToggleWindowMode = useCallback(() => {
+    setWindowMode((current) => (current === "expanded" ? "compact" : "expanded"))
+  }, [])
+
+  const handleTogglePinned = useCallback(async () => {
+    if (!window.desktop) return
+    setPinned(await window.desktop.toggleAlwaysOnTop())
+  }, [])
+
+  const statusChip = statusMeta(session.status)
+  const error = session.error ?? capture.error
+
   return (
-    <main className="min-h-screen bg-slate-100 p-4 text-slate-900 sm:p-6">
-      <div className="mx-auto flex max-w-6xl flex-col gap-4">
-        <Header
-          status={session.status}
-          latency={session.latency}
-          latencyVisible={import.meta.env.DEV && showLatency}
-          vadStatus={capture.vadStatus}
-          vadReady={capture.vadReady}
-          vadError={capture.vadError}
-          vadVisible={capture.isCapturing}
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
+    <main className="flex h-screen flex-col bg-slate-100 text-slate-900">
+      <CompactHeader
+        status={session.status}
+        windowMode={windowMode}
+        pinned={pinned}
+        inElectron={inElectron}
+        sourceLabel={shortCode(sourceLanguage)}
+        targetLabel={shortCode(targetLanguage)}
+        onToggleWindowMode={handleToggleWindowMode}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onTogglePinned={() => void handleTogglePinned()}
+        onMinimize={() => window.desktop?.minimize()}
+        onClose={() => window.desktop?.close()}
+      />
 
-        <ErrorBanner message={session.error ?? capture.error} onDismiss={session.dismissError} />
+      <ErrorBanner
+        message={error}
+        onDismiss={() => session.dismissError()}
+      />
 
-        <section className="flex flex-col gap-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <LanguageControls
+      {windowMode === "expanded" ? (
+        <>
+          <LanguageBar
             sourceValue={sourceLanguage}
             targetValue={targetLanguage}
             sourceOptions={SOURCE_LANGUAGES}
@@ -126,56 +172,49 @@ export default function App() {
             onTargetChange={setTargetLanguage}
             disabled={isRunning}
           />
-          <div className="border-t border-slate-100 pt-5">
-            <AudioControls
-              isRunning={isRunning}
-              isCapturing={capture.isCapturing}
-              audioSource={audioSource}
-              audioSources={AUDIO_SOURCES}
-              onAudioSourceChange={setAudioSource}
-              onStart={() => void handleStart()}
-              onStop={handleStop}
-              disabled={mode === "live" && !navigator.mediaDevices?.getUserMedia}
-            />
+
+          <div className="flex min-h-0 flex-1 flex-col gap-2 px-3 pb-2">
+            <CompactPanel
+              title="LIVE SPEECH"
+              right={
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusChip.textClass} bg-slate-100`}
+                >
+                  {statusChip.label}
+                </span>
+              }
+            >
+              <TranscriptView
+                segments={session.transcriptSegments}
+                partial={session.partialText}
+                status={session.status}
+              />
+            </CompactPanel>
+
+            <CompactPanel title="TRANSLATION" accent>
+              <TranslationView
+                latest={session.latestTranslation}
+                targetLanguage={targetLanguage}
+              />
+            </CompactPanel>
           </div>
-        </section>
-
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <TranscriptPanel
-            segments={session.transcriptSegments}
-            partial={session.partialText}
-            status={session.status}
-          />
-          <TranslationPanel
+        </>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col justify-center px-4 py-3">
+          <TranslationView
             latest={session.latestTranslation}
-            history={session.translationSegments}
             targetLanguage={targetLanguage}
+            prominent
           />
-        </section>
+        </div>
+      )}
 
-        {import.meta.env.DEV && (
-          <DiagnosticsPanel
-            sampleRate={capture.sampleRate}
-            chunkSizeBytes={capture.chunkSizeBytes}
-            chunksPerSecond={capture.chunksPerSecond}
-            bytesSent={capture.bytesSent}
-            bytesReceived={session.bytesReceived}
-            connectionState={session.connectionState}
-            vadStatus={capture.vadStatus}
-            vadReady={capture.vadReady}
-            vadError={capture.vadError}
-            vadProbability={capture.vadProbability}
-            vadSilenceThresholdMs={vadSilenceThresholdMs}
-          />
-        )}
-
-        {mode === "mock" && (
-          <p className="text-center text-xs text-slate-400">
-            Demo mode — microphone audio is captured locally but not sent anywhere. Open
-            settings and switch to Live WebSocket to stream audio to the backend.
-          </p>
-        )}
-      </div>
+      <ListeningControls
+        status={session.status}
+        isRunning={isRunning}
+        onStart={() => void handleStart()}
+        onStop={handleStop}
+      />
 
       <SettingsModal
         open={settingsOpen}
@@ -189,7 +228,34 @@ export default function App() {
         onVADSilenceThresholdChange={handleVADSilenceThresholdChange}
         onVADSpeechThresholdChange={handleVADSpeechThresholdChange}
         onClose={() => setSettingsOpen(false)}
-      />
+      >
+        {import.meta.env.DEV && (
+          <div className="flex flex-col gap-3 border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Pipeline latency
+              </span>
+              <LatencyIndicator
+                latency={session.latency}
+                visible={showLatency}
+              />
+            </div>
+            <DiagnosticsPanel
+              sampleRate={capture.sampleRate}
+              chunkSizeBytes={capture.chunkSizeBytes}
+              chunksPerSecond={capture.chunksPerSecond}
+              bytesSent={capture.bytesSent}
+              bytesReceived={session.bytesReceived}
+              connectionState={session.connectionState}
+              vadStatus={capture.vadStatus}
+              vadReady={capture.vadReady}
+              vadError={capture.vadError}
+              vadProbability={capture.vadProbability}
+              vadSilenceThresholdMs={vadSilenceThresholdMs}
+            />
+          </div>
+        )}
+      </SettingsModal>
     </main>
   )
 }

@@ -1,1 +1,17 @@
 @import "tailwindcss";
+
+/* Frameless Electron window: the header is the drag handle for moving the
+   window. Interactive controls inside it must opt out with .app-no-drag. */
+.app-drag {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Keep the scrollbar out of the way in the compact window. */
+* {
+  scrollbar-width: thin;
+}

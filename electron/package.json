@@ -1,0 +1,23 @@
+{
+  "name": "translator-electron",
+  "version": "0.1.0",
+  "description": "Desktop companion wrapper for the Real-Time Translator (Live Translator window).",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n backend,vite,electron -c blue,green,magenta \"npm:dev:backend\" \"npm:dev:vite\" \"npm:dev:electron\"",
+    "dev:backend": "cd ..\\backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
+    "dev:vite": "npm --prefix ../frontend run dev",
+    "dev:electron": "wait-on tcp:127.0.0.1:8000 tcp:127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "dev:electron:only": "cross-env TRANSLATOR_EXTERNAL_BACKEND=true electron .",
+    "build:renderer": "npm --prefix ../frontend run build",
+    "start": "npm run build:renderer && electron .",
+    "start:backend": "npm run dev:backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "wait-on": "^8.0.1"
+  }
+}

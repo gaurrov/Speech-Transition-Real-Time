@@ -1,0 +1,19 @@
+{
+  "name": "real-time-translator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Real-Time Translator: FastAPI backend, React frontend, and Electron desktop companion window.",
+  "scripts": {
+    "dev": "npm --prefix electron run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix electron run dev:backend",
+    "dev:electron": "npm --prefix electron run dev:electron",
+    "start": "npm --prefix electron run start",
+    "build": "npm --prefix frontend run build",
+    "typecheck": "npm --prefix frontend run typecheck",
+    "lint": "npm --prefix frontend run lint",
+    "test:backend": "cd backend && uv run pytest",
+    "lint:backend": "cd backend && uv run ruff check .",
+    "install:all": "npm --prefix frontend install && npm --prefix electron install"
+  }
+}

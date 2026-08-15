@@ -21,6 +21,9 @@ export type SessionStatus =
 
 export type SessionMode = "mock" | "live"
 
+/** How the compact companion window lays out its content. */
+export type WindowMode = "expanded" | "compact"
+
 export type AudioEncoding = "linear16" | "opus"
 
 export interface SessionConfiguration {

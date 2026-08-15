@@ -4,6 +4,9 @@ import { defineConfig } from "vite"
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Relative asset base so the production bundle can be loaded from
+  // file:// inside the Electron window (not just from a web server).
+  base: "./",
   resolve: {
     conditions: [
       // Pick the extern-wasm onnxruntime-web build: the loader and its .wasm

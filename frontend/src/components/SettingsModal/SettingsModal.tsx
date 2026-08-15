@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import type { ReactNode } from "react"
 import type { SessionMode } from "../../types"
 import { XIcon } from "../icons"
 
@@ -14,6 +15,8 @@ export interface SettingsModalProps {
   onVADSilenceThresholdChange: (value: number) => void
   onVADSpeechThresholdChange: (value: number) => void
   onClose: () => void
+  /** Dev-only content (e.g. audio diagnostics) rendered below the settings. */
+  children?: ReactNode
 }
 
 export function SettingsModal({
@@ -28,6 +31,7 @@ export function SettingsModal({
   onVADSilenceThresholdChange,
   onVADSpeechThresholdChange,
   onClose,
+  children,
 }: SettingsModalProps) {
   useEffect(() => {
     if (!open) return
@@ -142,6 +146,8 @@ export function SettingsModal({
             </label>
           </fieldset>
         </div>
+
+        {children}
       </div>
     </div>
   )
