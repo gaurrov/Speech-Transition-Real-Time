@@ -3,7 +3,8 @@
 A real-time, multilingual speech translator for online meetings (Zoom, Google Meet, etc.).
 Streams live speech to text, translates it, and displays translated captions with
 minimal latency — with silence detection used to produce clean sentence boundaries
-and punctuation.
+and punctuation. It ships as a compact, always-on-top **desktop companion window**
+(Electron) that sits beside your meeting and shows live translations while you talk.
 
 > **Status:** the backend now streams live transcripts through **Deepgram
 > streaming ASR** (Phase 1) and translates finalized utterances through a
@@ -32,11 +33,15 @@ and punctuation.
 
 ```
 real-time-translator/
+├── electron/         Electron desktop companion window
+│   ├── main.js         main process: compact always-on-top window, window-state
+│   │                   persistence, backend auto-start, window IPC
+│   ├── preload.js      contextBridge: exposes only window.desktop controls
+│   └── package.json    dev scripts (backend + vite + electron together)
 ├── frontend/          React + TypeScript + Vite + Tailwind UI
 │   └── src/
-│       ├── components/  LanguageSelector, AudioControls, ConnectionStatus,
-│       │                LatencyIndicator, ErrorBanner, TranscriptPanel,
-│       │                TranslationPanel
+│       ├── components/  CompactHeader, LanguageBar, TranscriptView,
+│       │                TranslationView, ListeningControls, SettingsModal, ...
 │       ├── hooks/       useTranslatorSession, useAudioCapture
 │       ├── providers/   vad/ (VADProvider interface + SileroVADProvider stub)
 │       ├── lib/         wsClient.ts (TranslatorClient WebSocket wrapper)
@@ -118,6 +123,59 @@ cd frontend && npm run lint
 cd frontend && npm run typecheck
 cd frontend && npm run build
 ```
+
+## Desktop companion (Electron)
+
+The translator runs as a small floating window that stays on top of your meeting
+(Zoom, Meet, Teams). It is **not** a full-screen site.
+
+### Start everything at once
+
+```bash
+npm run install:all   # first time: install frontend + electron deps
+npm run dev           # starts FastAPI backend + Vite dev server + Electron
+```
+
+`npm run dev` is defined in the **electron** package and uses `concurrently` to
+run all three together: the backend on `:8000`, Vite on `:5173`, and Electron
+(which waits on both ports, then loads `http://localhost:5173`).
+
+Individual pieces (useful while iterating):
+
+```bash
+npm run dev:backend    # uvicorn with --reload
+npm run dev:frontend   # Vite only (browser tab, no window chrome)
+npm run dev:electron   # Electron only (uses already-running backend + Vite)
+```
+
+To run Electron against the **built** renderer instead of the dev server:
+
+```bash
+npm run start   # builds frontend/dist, then launches Electron (loads file://)
+```
+
+### Window behavior
+
+- Compact companion window (~420×600), `alwaysOnTop` ("floating" level), movable
+  by dragging the header, resizable, minimizable.
+- Size and position are remembered between launches (`window-state.json`).
+- Pin/unpin button toggles always-on-top.
+- Two display modes: **Expanded** (source transcript + translation + language
+  selectors) and **Compact** (translation only). Switch via the header.
+- Debug-only details (latency, WS events, audio diagnostics) are hidden unless
+  the app was built for development and are exposed only through Settings.
+
+### Security model
+
+The renderer runs with `contextIsolation: true`, `nodeIntegration: false`,
+`sandbox: true`, and `webSecurity: true`. The preload script exposes **only**
+`window.desktop` (minimize/close/pin/always-on-top) via `contextBridge` — no
+Node APIs reach the React code. See `electron/main.js` + `electron/preload.js`
+and the Electron section in `ARCHITECTURE.md`.
+
+The renderer still talks to FastAPI exactly as before over the existing
+WebSocket protocol — the desktop shell adds no new AI pipeline code and changes
+nothing in ASR/translation/WebSocket handling.
 
 ## Design principles
 

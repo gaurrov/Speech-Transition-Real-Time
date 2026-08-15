@@ -238,13 +238,15 @@ raw binary WebSocket messages rather than base64-encoded JSON.
 ```
 frontend/src/
 ├── components/         one folder per reusable UI piece (own file + index.ts)
-│   ├── LanguageSelector/
-│   ├── AudioControls/
-│   ├── ConnectionStatus/
-│   ├── LatencyIndicator/
-│   ├── ErrorBanner/
-│   ├── TranscriptPanel/
-│   └── TranslationPanel/
+│   ├── CompactHeader/      drag handle + connection dot + mode/settings/pin/
+│   │                       minimize/close buttons (the frameless window chrome)
+│   ├── CompactPanel/       titled card used for the LIVE SPEECH / TRANSLATION panels
+│   ├── LanguageBar/        source → target selectors (Auto Detect → target)
+│   ├── TranscriptView/     live speech panel (partials in place, finals frozen)
+│   ├── TranslationView/    translation panel; `prominent` layout for compact mode
+│   ├── ListeningControls/  Start/Stop footer with ● status
+│   ├── SettingsModal/      mode, VAD tuning, and DEV-only diagnostics
+│   └── ...                 ConnectionDot, ErrorBanner, icons, status helpers
 ├── hooks/
 │   ├── useTranslatorSession.ts   orchestrates connection + pipeline state
 │   └── useAudioCapture.ts        getUserMedia + AudioWorklet plumbing
@@ -253,14 +255,65 @@ frontend/src/
 ├── lib/
 │   └── wsClient.ts                thin WebSocket transport (TranslatorClient)
 ├── types/                         shared types mirroring backend schemas
-├── styles/                        Tailwind entrypoint
-├── App.tsx                        UI shell: selectors, controls, two panels
+├── styles/                        Tailwind entrypoint (.app-drag / .app-no-drag)
+├── App.tsx                        compact UI shell: header, language bar,
+│                                  transcript/translation panels, controls
 └── main.tsx
 ```
 
 `useTranslatorSession` is the single seam between UI and networking/audio —
 components never touch `WebSocket` or `MediaStream` directly, which keeps the
 UI layer trivial to test and restyle.
+
+## 6a. Electron desktop companion window
+
+The app ships as a small always-on-top desktop window rather than a full-page
+site, so it can sit beside Zoom/Meet/Teams while the meeting runs.
+
+```
+Electron
+├── Main process (electron/main.js)
+│   ├── Creates a compact frameless BrowserWindow (default ~420×600)
+│   ├── alwaysOnTop("floating"), resizable, min 320×480
+│   ├── Remembers size/position in <userData>/window-state.json
+│   ├── Auto-starts the FastAPI backend if :8000 is not already serving
+│   │   (set TRANSLATOR_EXTERNAL_BACKEND=true to run it yourself)
+│   └── IPC surface: window:minimize / window:close /
+│       window:toggle-always-on-top / window:is-always-on-top
+├── Renderer process
+│   └── The existing React app (dev: Vite server; prod: frontend/dist via file://)
+└── Preload (electron/preload.js)
+    └── contextBridge exposes a single narrow `window.desktop` object
+```
+
+Security model (all enforced in `electron/main.js` webPreferences):
+
+- `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`,
+  `webSecurity: true`.
+- The only bridge is `window.desktop` (isElectron, platform, minimize, close,
+  toggleAlwaysOnTop, isAlwaysOnTop, onAlwaysOnTopChanged). No Node APIs reach
+  the React renderer.
+- The renderer reaches the backend over the exact same `ws://…/ws/translate`
+  protocol as the browser build — the Electron shell adds no AI pipeline code
+  and changes nothing in ASR/translation/VAD handling.
+
+UI behavior:
+
+- Two display modes, persisted in `localStorage`:
+  - **Expanded**: language selectors + LIVE SPEECH panel + TRANSLATION panel.
+  - **Compact**: only the latest translation + ● status (EN → HI + Live dot).
+- The header is the drag handle (`.app-drag`); buttons opt out (`.app-no-drag`).
+- Always-on-top has a pin/unpin toggle, kept in sync with the OS window state
+  via the `window:always-on-top-changed` push event.
+- Latency metrics, raw WS events, and audio diagnostics are development-only —
+  they render only when built for development and live inside Settings.
+
+Development workflow (see README):
+
+- `npm run dev` (in `electron/`) runs backend + Vite + Electron together.
+- The main process loads `VITE_DEV_SERVER_URL` when set, otherwise
+  `frontend/dist/index.html`. Vite uses a relative `base: "./"` so the built
+  bundle also works over `file://` inside the window.
 
 ## 7. Backend structure
 
