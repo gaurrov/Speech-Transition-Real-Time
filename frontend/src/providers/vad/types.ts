@@ -84,6 +84,8 @@ export interface VADProvider {
   start(): Promise<void>
   /** Stop VAD processing and reset the internal state machine. */
   stop(): Promise<void>
+  /** Release the underlying worker and drop all subscriptions. */
+  dispose(): void
   /** Feed one contiguous Float32 window (windowSize samples @ sampleRate). */
   processFrame(samples: Float32Array): void
   /** Subscribe to VAD lifecycle events. Returns an unsubscribe function. */

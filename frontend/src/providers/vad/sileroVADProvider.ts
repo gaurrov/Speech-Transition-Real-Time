@@ -52,6 +52,20 @@ export class SileroVADProvider implements VADProvider {
     this.worker?.postMessage({ type: "reset" })
   }
 
+  dispose(): void {
+    this.started = false
+    this.initPromise = null
+    this.eventHandlers.clear()
+    this.stateHandlers.clear()
+    this.probabilityHandlers.clear()
+    if (this.worker) {
+      this.worker.onmessage = null
+      this.worker.onerror = null
+      this.worker.terminate()
+      this.worker = null
+    }
+  }
+
   processFrame(samples: Float32Array): void {
     if (!this.started || !this.worker) return
     this.worker.postMessage({ type: "frame", samples }, [samples.buffer])

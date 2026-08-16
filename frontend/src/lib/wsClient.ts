@@ -92,11 +92,13 @@ export class TranslatorClient implements StreamingClient {
 
     socket.onopen = () => {
       this.reconnectAttempts = 0
-      if (this.startSessionId) {
-        this.pending.unshift({ type: "start_session", session_id: this.startSessionId })
-      }
-      if (this.configuration) {
-        this.pending.push({ type: "session_configuration", ...this.configuration })
+      if (this.pending.length === 0) {
+        if (this.startSessionId) {
+          this.pending.unshift({ type: "start_session", session_id: this.startSessionId })
+        }
+        if (this.configuration) {
+          this.pending.push({ type: "session_configuration", ...this.configuration })
+        }
       }
       this.flushQueue()
       this.setState("connected")

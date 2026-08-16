@@ -32,6 +32,7 @@ import uuid
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
+from starlette.websockets import WebSocketState
 
 from app.config import Settings, get_settings
 from app.models import schemas
@@ -588,12 +589,24 @@ async def _handle_configuration(
     if session is None:
         session = session_manager.create(websocket, config.session_id)
     elif session.websocket is not websocket:
-        await _send_error(
-            websocket,
-            "session_in_use",
-            f"Session {config.session_id} belongs to another connection",
-        )
-        return current
+        if session.websocket.client_state == WebSocketState.DISCONNECTED:
+            # The old connection already died; take over the session so a
+            # legitimate reconnect with the same session_id succeeds even
+            # before the server processes the old socket's teardown.
+            logger.info(
+                "session_takeover",
+                session_id=config.session_id,
+                old_websocket=id(session.websocket),
+                new_websocket=id(websocket),
+            )
+            session.websocket = websocket
+        else:
+            await _send_error(
+                websocket,
+                "session_in_use",
+                f"Session {config.session_id} belongs to another connection",
+            )
+            return current
 
     if current is not None and current is not session:
         await _send_error(

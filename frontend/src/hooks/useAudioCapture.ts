@@ -137,7 +137,7 @@ export function useAudioCapture({
     chunksRef.current = 0
     bytesSentRef.current = 0
     lastStatsCountRef.current = 0
-    vadProviderRef.current?.stop()
+    vadProviderRef.current?.dispose()
     vadProviderRef.current = null
     setChunksPerSecond(0)
     setBytesSent(0)
