@@ -421,7 +421,7 @@ class Session:
             try:
                 await self.websocket.send_json(event.model_dump())
             except Exception:
-                logger.debug("ws_send_failed", session_id=self.session_id, event=event.type)
+                logger.debug("ws_send_failed", session_id=self.session_id, event_type=event.type)
 
     async def _send_error(self, code: str, message: str) -> None:
         await self.send_event(

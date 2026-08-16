@@ -1,7 +1,10 @@
 """WebSocket /ws/translate protocol tests."""
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import app
 from app.models.schemas import TranscriptSegment
 from app.services.translation.base import TranslationError
@@ -319,6 +322,24 @@ def _stop_and_await(ws, session_id: str, max_events: int = 30) -> None:
         if event["type"] == "session_stopped":
             return
     raise AssertionError("session_stopped never arrived")
+
+
+def test_send_event_never_raises_when_peer_is_gone() -> None:
+    """Regression: a failed WS send (client disconnected) must be swallowed.
+
+    The old failure log passed ``event=`` to structlog, which is a reserved
+    keyword and raised ``TypeError`` inside the error path itself.
+    """
+    from app.models import schemas
+
+    class _BoomWebSocket:
+        async def send_json(self, payload):
+            raise RuntimeError("peer went away")
+
+    session = translate_stream.Session("gone-peer", _BoomWebSocket(), get_settings())
+    asyncio.run(
+        session.send_event(schemas.SessionStoppedEvent(session_id="gone-peer", reason="x"))
+    )
 
 
 def test_partial_transcript_is_not_translated(
