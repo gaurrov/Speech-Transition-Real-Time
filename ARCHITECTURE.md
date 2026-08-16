@@ -11,9 +11,9 @@
   refinement is valuable but must never sit on the hot path.
 - **Silence is a first-class signal**, not just "no audio" — it's used both to
   save bandwidth/compute and to produce clean sentence boundaries.
-- **Extensible to meeting audio.** The pipeline should not assume "microphone"
-  as the only audio source; system/meeting audio capture is a planned input,
-  not an architectural afterthought.
+- **Extensible to meeting audio.** The pipeline does not assume "microphone"
+  as the only audio source; system/meeting audio capture is a supported input
+  (see `docs/AUDIO_CAPTURE.md`), delivered through the same capture pipeline.
 
 ## 2. High-level data flow
 
@@ -345,12 +345,12 @@ of how complex the pipeline gets.
 ## 8. Path to meeting/system audio
 
 Today's design already generalizes past "microphone": the WebSocket protocol
-and `ASRProvider` interface don't care where PCM frames come from. Consuming
-Zoom/Meet system audio is a matter of adding a capture source (e.g. a
-platform-level loopback capture, a meeting-bot integration, or a browser tab
-audio capture) that feeds the same `useAudioCapture` → WebSocket → `ASRProvider`
-path. No changes to ASR, translation, VAD-interpretation, or refinement layers
-are expected.
+and `ASRProvider` interface don't care where PCM frames come from. System
+audio is captured in the Electron companion (Windows) and fed through the same
+`useAudioCapture` → WebSocket → `ASRProvider` path — see
+`docs/AUDIO_CAPTURE.md`. No changes to ASR, translation, VAD-interpretation, or
+refinement layers were required. macOS/Linux system capture would need a
+different mechanism behind the same `AudioSource` interface.
 
 ## 9. Latency budget (target, for tuning once implemented)
 

@@ -14,10 +14,9 @@ import { LANGUAGES, SOURCE_LANGUAGES } from "./config/languages"
 import { loadPreferences, savePreferences } from "./config/preferences"
 import { useAudioCapture } from "./hooks/useAudioCapture"
 import { useTranslatorSession } from "./hooks/useTranslatorSession"
+import { createAudioSource, type AudioSourceKind } from "./providers/audio/sources"
 import { DEFAULT_VAD_CONFIG } from "./providers/vad/types"
 import type { SessionMode, WindowMode } from "./types"
-
-const AUDIO_SOURCE = "microphone"
 
 function shortCode(code: string): string {
   return code === "auto" ? "AUTO" : code.toUpperCase()
@@ -30,6 +29,7 @@ export default function App() {
   const [targetLanguage, setTargetLanguage] = useState(prefsRef.current.targetLanguage)
   const [windowMode, setWindowMode] = useState<WindowMode>(prefsRef.current.windowMode)
   const [mode, setMode] = useState<SessionMode>(prefsRef.current.sessionMode)
+  const [audioSource, setAudioSource] = useState<AudioSourceKind>(prefsRef.current.audioSource)
   const [isRunning, setIsRunning] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [showLatency, setShowLatency] = useState(import.meta.env.DEV)
@@ -68,8 +68,9 @@ export default function App() {
       targetLanguage,
       windowMode,
       sessionMode: mode,
+      audioSource,
     })
-  }, [sourceLanguage, targetLanguage, windowMode, mode])
+  }, [sourceLanguage, targetLanguage, windowMode, mode, audioSource])
 
   // Keep the pin button in sync with the OS window state.
   useEffect(() => {
@@ -80,18 +81,19 @@ export default function App() {
   }, [])
 
   const handleStart = useCallback(async () => {
-    const micOk = await capture.start()
-    if (!micOk) return
+    const source = createAudioSource(audioSource)
+    const ok = await capture.start(source)
+    if (!ok) return
     session.start({
       session_id: crypto.randomUUID(),
       source_language: sourceLanguage,
       target_language: targetLanguage,
-      audio_source: AUDIO_SOURCE,
+      audio_source: audioSource === "system" ? "system" : "microphone",
       sample_rate: 16_000,
       encoding: "linear16",
     })
     setIsRunning(true)
-  }, [capture, session, sourceLanguage, targetLanguage])
+  }, [capture, session, sourceLanguage, targetLanguage, audioSource])
 
   const handleStop = useCallback(() => {
     session.stop()
@@ -213,6 +215,7 @@ export default function App() {
       <ListeningControls
         status={session.status}
         isRunning={isRunning}
+        sourceLabel={audioSource === "system" ? "System audio" : "Microphone"}
         onStart={() => void handleStart()}
         onStop={handleStop}
       />
@@ -224,6 +227,10 @@ export default function App() {
         latencyToggleAvailable={import.meta.env.DEV}
         vadSilenceThresholdMs={vadSilenceThresholdMs}
         vadSpeechThreshold={vadSpeechThreshold}
+        audioSource={audioSource}
+        inElectron={inElectron}
+        disabled={isRunning}
+        onAudioSourceChange={setAudioSource}
         onModeChange={handleModeChange}
         onShowLatencyChange={setShowLatency}
         onVADSilenceThresholdChange={handleVADSilenceThresholdChange}

@@ -1,3 +1,4 @@
+import type { AudioSourceKind } from "../providers/audio/sources"
 import type { WindowMode } from "../types"
 
 export interface TranslatorPreferences {
@@ -5,6 +6,7 @@ export interface TranslatorPreferences {
   targetLanguage: string
   windowMode: WindowMode
   sessionMode: "mock" | "live"
+  audioSource: AudioSourceKind
 }
 
 const STORAGE_KEY = "live-translator-preferences"
@@ -14,6 +16,7 @@ const DEFAULTS: TranslatorPreferences = {
   targetLanguage: "hi",
   windowMode: "expanded",
   sessionMode: "live",
+  audioSource: "microphone",
 }
 
 export function loadPreferences(): TranslatorPreferences {
@@ -26,6 +29,7 @@ export function loadPreferences(): TranslatorPreferences {
       ...parsed,
       windowMode: parsed.windowMode === "compact" ? "compact" : "expanded",
       sessionMode: parsed.sessionMode === "mock" ? "mock" : "live",
+      audioSource: parsed.audioSource === "system" ? "system" : "microphone",
     }
   } catch {
     return DEFAULTS

@@ -5,11 +5,19 @@ import { isActive, statusMeta } from "../status"
 export interface ListeningControlsProps {
   status: SessionStatus
   isRunning: boolean
+  /** Active capture source label (e.g. "Microphone" or the window name). */
+  sourceLabel?: string
   onStart: () => void
   onStop: () => void
 }
 
-export function ListeningControls({ status, isRunning, onStart, onStop }: ListeningControlsProps) {
+export function ListeningControls({
+  status,
+  isRunning,
+  sourceLabel,
+  onStart,
+  onStop,
+}: ListeningControlsProps) {
   const meta = statusMeta(status)
   const active = isRunning && isActive(status)
 
@@ -30,6 +38,11 @@ export function ListeningControls({ status, isRunning, onStart, onStop }: Listen
           />
           {isRunning ? meta.label : "Off"}
         </span>
+        {sourceLabel && isRunning && (
+          <span className="truncate rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600">
+            {sourceLabel}
+          </span>
+        )}
       </div>
 
       {isRunning ? (

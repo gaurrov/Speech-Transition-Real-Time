@@ -17,7 +17,7 @@
  * in preload.js.
  */
 
-const { app, BrowserWindow, ipcMain, screen } = require("electron")
+const { app, BrowserWindow, desktopCapturer, ipcMain, screen, session } = require("electron")
 const { spawn } = require("child_process")
 const fs = require("node:fs")
 const net = require("node:net")
@@ -249,6 +249,25 @@ function registerIpc() {
   ipcMain.handle("window:is-always-on-top", () => {
     return mainWindow ? mainWindow.isAlwaysOnTop() : true
   })
+
+  // List capturable desktop sources for system-audio capture. Only sources
+  // with `audio: true` can feed the audio pipeline (on Windows this is the
+  // screen and any window currently producing audio). macOS/Linux Chromium
+  // does not expose per-source audio through desktopCapturer, so the UI shows
+  // the limitation and falls back to the microphone.
+  ipcMain.handle("audio:list-sources", async () => {
+    const sources = await desktopCapturer.getSources({
+      types: ["window", "screen"],
+      thumbnailSize: { width: 160, height: 100 },
+      fetchWindowIcons: false,
+    })
+    return sources.map((source) => ({
+      id: source.id,
+      name: source.name.split(" — ")[0].trim() || source.name,
+      kind: source.id.startsWith("screen:") ? "screen" : "window",
+      audio: source.audio,
+    }))
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +276,17 @@ function registerIpc() {
 
 app.whenReady().then(async () => {
   registerIpc()
+
+  // System-audio capture for the renderer's getDisplayMedia() requests. Modern
+  // Chromium (Electron 33+) can no longer attach audio to desktop sources via
+  // getUserMedia (renderer terminates with DESKTOP_CAPTURER_INVALID_OR_UNKNOWN_ID),
+  // and desktopCapturer reports no per-window audio on Windows. The supported
+  // path is a loopback of the device's output (whole system audio) delivered
+  // through this handler.
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    callback({ audio: "loopback" })
+  })
+
   await startBackend()
   createWindow()
 

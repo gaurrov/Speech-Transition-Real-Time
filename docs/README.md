@@ -10,8 +10,6 @@ Planned docs (not yet written):
 
 - `provider-setup.md` — how to obtain and configure Deepgram, cloud
   translation, and LLM provider API keys.
-- `meeting-audio.md` — capturing Zoom / Google Meet audio (system/tab audio,
-  meeting-bot integration).
 - `protocol.md` — the WebSocket message contract between frontend and backend.
 
 Written so far:
@@ -23,3 +21,6 @@ Written so far:
   protocol, failure handling.
 - `performance.md` — end-to-end latency instrumentation (T0–T9), measured
   numbers, bottlenecks, and optimizations.
+- `audio-capture.md` — microphone vs. system/meeting audio capture: the
+  `AudioSource` abstraction, Windows mechanism, permissions, echo avoidance,
+  platform limitations, troubleshooting.

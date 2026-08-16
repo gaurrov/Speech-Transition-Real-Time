@@ -158,11 +158,16 @@ still be run by a human in a real browser (see `docs/vad.md`).
 
 ## Phase 5 — Meeting/system audio ingestion
 
-- [ ] Design a second audio-capture source (tab/system audio capture or a
-      meeting-bot integration) that feeds the same WS protocol.
+- [x] Design a second audio-capture source (tab/system audio capture) that
+      feeds the same WS protocol — `AudioSource` abstraction in
+      `frontend/src/providers/audio/sources.ts`, `SystemAudioSource` via the
+      Electron companion's `desktopCapturer` (Windows). See
+      `docs/AUDIO_CAPTURE.md`.
 - [ ] Handle multi-speaker audio: either accept diarization from the ASR
       provider or scope this explicitly out for v1.
-- [ ] Document setup for Zoom/Google Meet in `docs/`.
+- [x] Document setup for Zoom/Google Meet in `docs/` — see
+      `docs/AUDIO_CAPTURE.md` (mechanism, permissions, echo avoidance,
+      platform limitations, troubleshooting).
 
 ## Phase 6 — Production hardening
 

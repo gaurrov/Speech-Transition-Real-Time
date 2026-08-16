@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { AudioSourceError, MicrophoneAudioSource, type AudioSource } from "../providers/audio/sources"
 import { SileroVADProvider } from "../providers/vad/sileroVADProvider"
 import type { VADConfig, VADEvent, VADStatus } from "../providers/vad/types"
 import { DEFAULT_VAD_CONFIG } from "../providers/vad/types"
@@ -38,21 +39,20 @@ const ACTIVITY_THRESHOLD = 0.012
 const ACTIVITY_HANGOVER_MS = 350
 
 function captureErrorMessage(cause: unknown): string {
+  if (cause instanceof AudioSourceError) return cause.message
   if (cause instanceof DOMException) {
     switch (cause.name) {
       case "NotAllowedError":
-        return "Microphone permission was denied. Allow microphone access in your browser and try again."
+        return "Audio capture permission was denied. Allow access and try again."
       case "NotFoundError":
-        return "No microphone was found on this device."
+        return "No audio source was found for this selection."
       case "NotReadableError":
-        return "The microphone is in use by another application or cannot be read."
-      case "OverconstrainedError":
-        return "No microphone matching the requested settings was found."
+        return "The audio source is in use by another application or cannot be read."
       default:
-        return cause.message || "Unable to access the microphone."
+        return cause.message || "Unable to start audio capture."
     }
   }
-  return cause instanceof Error ? cause.message : "Unable to access the microphone."
+  return cause instanceof Error ? cause.message : "Unable to start audio capture."
 }
 
 function audioContextCtor(): typeof AudioContext {
@@ -153,169 +153,161 @@ export function useAudioCapture({
     }
   }, [])
 
-  const start = useCallback(async (): Promise<boolean> => {
-    if (capturingRef.current) return true
-    setError(null)
+  const start = useCallback(
+    async (source?: AudioSource): Promise<boolean> => {
+      if (capturingRef.current) return true
+      setError(null)
 
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError("Microphone access is not supported in this browser.")
-      return false
-    }
-
-    let mediaStream: MediaStream
-    try {
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      })
-    } catch (cause) {
-      setError(captureErrorMessage(cause))
-      return false
-    }
-    streamRef.current = mediaStream
-
-    const Ctor = audioContextCtor()
-    if (!Ctor) {
-      teardown(true)
-      setError("Web Audio is not supported in this browser.")
-      return false
-    }
-
-    let audioContext: AudioContext | null = null
-    try {
-      audioContext = new Ctor({ sampleRate: targetSampleRateRef.current })
-    } catch {
+      const audioSource = source ?? new MicrophoneAudioSource()
+      let mediaStream: MediaStream
       try {
-        audioContext = new Ctor()
+        mediaStream = await audioSource.acquire()
+      } catch (cause) {
+        setError(captureErrorMessage(cause))
+        return false
+      }
+      streamRef.current = mediaStream
+
+      const Ctor = audioContextCtor()
+      if (!Ctor) {
+        teardown(true)
+        setError("Web Audio is not supported in this browser.")
+        return false
+      }
+
+      let audioContext: AudioContext | null = null
+      try {
+        audioContext = new Ctor({ sampleRate: targetSampleRateRef.current })
       } catch {
-        audioContext = null
-      }
-    }
-    if (!audioContext) {
-      teardown(true)
-      setError("Web Audio is not supported in this browser.")
-      return false
-    }
-    audioContextRef.current = audioContext
-
-    try {
-      if (audioContext.state === "suspended") {
-        await audioContext.resume()
-      }
-      await audioContext.audioWorklet.addModule(
-        new URL("../audio/pcmCaptureWorklet.js", import.meta.url).href,
-      )
-    } catch (cause) {
-      teardown(true)
-      setError(cause instanceof Error ? cause.message : "Unable to start audio capture")
-      return false
-    }
-
-    const chunkSamples = Math.max(
-      1,
-      Math.round((targetSampleRateRef.current * chunkSizeMsRef.current) / 1000),
-    )
-    const config: WorkletConfig = {
-      type: "configure",
-      outputSampleRate: targetSampleRateRef.current,
-      chunkSamples,
-      speechThreshold: ACTIVITY_THRESHOLD,
-      hangoverMs: ACTIVITY_HANGOVER_MS,
-      vadEnabled: vadEnabledRef.current,
-      vadWindowSize: DEFAULT_VAD_CONFIG.windowSize,
-    }
-
-    try {
-      const node = new AudioWorkletNode(audioContext, "pcm-capture-processor", {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        channelCount: 1,
-        channelCountMode: "explicit",
-        channelInterpretation: "speakers",
-      })
-      const muteGain = audioContext.createGain()
-      muteGain.gain.value = 0
-      const source = audioContext.createMediaStreamSource(mediaStream)
-
-      source.connect(node)
-      node.connect(muteGain)
-      muteGain.connect(audioContext.destination)
-
-      node.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
-        const message = event.data
-        if (message.type === "audio" && message.buffer instanceof ArrayBuffer) {
-          const bytes = new Uint8Array(message.buffer)
-          bytesSentRef.current += bytes.byteLength
-          chunksRef.current += 1
-          onChunkRef.current?.(bytes)
-        } else if (message.type === "activity") {
-          setActivityAvailable(true)
-          setIsSpeaking(message.active === true)
-        } else if (message.type === "vad" && message.samples instanceof Float32Array) {
-          vadProviderRef.current?.processFrame(message.samples)
+        try {
+          audioContext = new Ctor()
+        } catch {
+          audioContext = null
         }
       }
-      node.port.postMessage(config)
+      if (!audioContext) {
+        teardown(true)
+        setError("Web Audio is not supported in this browser.")
+        return false
+      }
+      audioContextRef.current = audioContext
 
-      if (vadEnabledRef.current) {
-        const provider = new SileroVADProvider()
-        vadProviderRef.current = provider
-        provider.configure(vadConfigRef.current)
-        // The Silero model emits a probability every VAD frame (~32 ms). Throttle
-        // the React state update to ~4 Hz so the renderer is not re-rendered
-        // tens of times per second just to show a dev-only diagnostic number.
-        let lastProbStateAt = 0
-        provider.onEvent((vadEvent) => {
-          const now = performance.now()
-          if (now - lastProbStateAt >= 250) {
-            lastProbStateAt = now
-            setVadProbability(vadEvent.probability)
-          }
-          onVADEventRef.current?.(vadEvent)
-        })
-        provider.onStateChange(setVadStatus)
-        // Non-blocking: streaming starts immediately; the model loads in the
-        // background and frames are buffered by the worker until it is ready.
-        provider
-          .start()
-          .then(() => provider.init())
-          .then(() => setVadReady(true))
-          .catch((cause: unknown) => {
-            setVadError(cause instanceof Error ? cause.message : String(cause))
-          })
+      try {
+        if (audioContext.state === "suspended") {
+          await audioContext.resume()
+        }
+        await audioContext.audioWorklet.addModule(
+          new URL("../audio/pcmCaptureWorklet.js", import.meta.url).href,
+        )
+      } catch (cause) {
+        teardown(true)
+        setError(cause instanceof Error ? cause.message : "Unable to start audio capture")
+        return false
       }
 
-      workletNodeRef.current = node
-      sourceNodeRef.current = source
-      muteGainRef.current = muteGain
+      const chunkSamples = Math.max(
+        1,
+        Math.round((targetSampleRateRef.current * chunkSizeMsRef.current) / 1000),
+      )
+      const config: WorkletConfig = {
+        type: "configure",
+        outputSampleRate: targetSampleRateRef.current,
+        chunkSamples,
+        speechThreshold: ACTIVITY_THRESHOLD,
+        hangoverMs: ACTIVITY_HANGOVER_MS,
+        vadEnabled: vadEnabledRef.current,
+        vadWindowSize: DEFAULT_VAD_CONFIG.windowSize,
+      }
 
-      chunksRef.current = 0
-      bytesSentRef.current = 0
-      lastStatsCountRef.current = 0
-      setSampleRate(audioContext.sampleRate)
-      setChunkSizeBytes(chunkSamples * 2)
+      try {
+        const node = new AudioWorkletNode(audioContext, "pcm-capture-processor", {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          channelCount: 1,
+          channelCountMode: "explicit",
+          channelInterpretation: "speakers",
+        })
+        const muteGain = audioContext.createGain()
+        muteGain.gain.value = 0
+        const source = audioContext.createMediaStreamSource(mediaStream)
 
-      capturingRef.current = true
-      setIsCapturing(true)
+        source.connect(node)
+        node.connect(muteGain)
+        muteGain.connect(audioContext.destination)
 
-      statsTimerRef.current = window.setInterval(() => {
-        const chunks = chunksRef.current
-        setChunksPerSecond(chunks - lastStatsCountRef.current)
-        lastStatsCountRef.current = chunks
-        setBytesSent(bytesSentRef.current)
-      }, 1000)
+        node.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
+          const message = event.data
+          if (message.type === "audio" && message.buffer instanceof ArrayBuffer) {
+            const bytes = new Uint8Array(message.buffer)
+            bytesSentRef.current += bytes.byteLength
+            chunksRef.current += 1
+            onChunkRef.current?.(bytes)
+          } else if (message.type === "activity") {
+            setActivityAvailable(true)
+            setIsSpeaking(message.active === true)
+          } else if (message.type === "vad" && message.samples instanceof Float32Array) {
+            vadProviderRef.current?.processFrame(message.samples)
+          }
+        }
+        node.port.postMessage(config)
 
-      return true
-    } catch (cause) {
-      teardown(true)
-      setError(cause instanceof Error ? cause.message : "Unable to start audio capture")
-      return false
-    }
-  }, [teardown])
+        if (vadEnabledRef.current) {
+          const provider = new SileroVADProvider()
+          vadProviderRef.current = provider
+          provider.configure(vadConfigRef.current)
+          // The Silero model emits a probability every VAD frame (~32 ms). Throttle
+          // the React state update to ~4 Hz so the renderer is not re-rendered
+          // tens of times per second just to show a dev-only diagnostic number.
+          let lastProbStateAt = 0
+          provider.onEvent((vadEvent) => {
+            const now = performance.now()
+            if (now - lastProbStateAt >= 250) {
+              lastProbStateAt = now
+              setVadProbability(vadEvent.probability)
+            }
+            onVADEventRef.current?.(vadEvent)
+          })
+          provider.onStateChange(setVadStatus)
+          // Non-blocking: streaming starts immediately; the model loads in the
+          // background and frames are buffered by the worker until it is ready.
+          provider
+            .start()
+            .then(() => provider.init())
+            .then(() => setVadReady(true))
+            .catch((cause: unknown) => {
+              setVadError(cause instanceof Error ? cause.message : String(cause))
+            })
+        }
+
+        workletNodeRef.current = node
+        sourceNodeRef.current = source
+        muteGainRef.current = muteGain
+
+        chunksRef.current = 0
+        bytesSentRef.current = 0
+        lastStatsCountRef.current = 0
+        setSampleRate(audioContext.sampleRate)
+        setChunkSizeBytes(chunkSamples * 2)
+
+        capturingRef.current = true
+        setIsCapturing(true)
+
+        statsTimerRef.current = window.setInterval(() => {
+          const chunks = chunksRef.current
+          setChunksPerSecond(chunks - lastStatsCountRef.current)
+          lastStatsCountRef.current = chunks
+          setBytesSent(bytesSentRef.current)
+        }, 1000)
+
+        return true
+      } catch (cause) {
+        teardown(true)
+        setError(cause instanceof Error ? cause.message : "Unable to start audio capture")
+        return false
+      }
+    },
+    [teardown],
+  )
 
   const stop = useCallback(() => {
     teardown(true)

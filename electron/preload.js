@@ -23,4 +23,5 @@ contextBridge.exposeInMainWorld("desktop", {
     ipcRenderer.on("window:always-on-top-changed", listener)
     return () => ipcRenderer.removeListener("window:always-on-top-changed", listener)
   },
+  getAudioSources: () => ipcRenderer.invoke("audio:list-sources"),
 })

@@ -7,6 +7,8 @@
  * controls, no pin button).
  */
 
+import type { SystemAudioWindow } from "../providers/audio/sources"
+
 export interface DesktopBridge {
   readonly isElectron: true
   readonly platform: string
@@ -15,6 +17,11 @@ export interface DesktopBridge {
   toggleAlwaysOnTop: () => Promise<boolean>
   isAlwaysOnTop: () => Promise<boolean>
   onAlwaysOnTopChanged: (callback: (pinned: boolean) => void) => () => void
+  /**
+   * List desktop capture sources (windows + screen). Only sources that report
+   * `audio: true` can feed system-audio capture. Windows-only in practice.
+   */
+  getAudioSources: () => Promise<SystemAudioWindow[]>
 }
 
 declare global {
