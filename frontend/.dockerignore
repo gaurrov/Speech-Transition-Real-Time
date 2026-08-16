@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.vite/
+.env
+.env.*
+!.env.example
+public/models/
+public/vendor/onnx/
+*.log
+.git/
+.gitignore
+Dockerfile
+.dockerignore

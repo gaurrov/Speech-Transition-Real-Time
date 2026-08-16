@@ -8,6 +8,7 @@ is intentionally NOT implemented here -- this file only wires things up.
 """
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -21,8 +22,10 @@ from app.utils.logging import configure_logging
 from app.websocket.translate_stream import router as translate_stream_router
 
 settings = get_settings()
-configure_logging(settings.log_level)
+configure_logging(settings.log_level, settings.log_format)
 logger = structlog.get_logger(__name__)
+
+_STARTED_AT = time.time()
 
 
 @asynccontextmanager
@@ -52,12 +55,36 @@ app.include_router(translate_stream_router)
 
 @app.get("/health", tags=["system"])
 async def health() -> dict:
-    """Lightweight liveness/readiness probe. Does not touch external providers."""
+    """Liveness/readiness probe. Never touches external providers and never
+    exposes secrets -- only configuration *presence* booleans."""
+    from app.services.translation import _offline_runtime_available
+
     return {
         "status": "ok",
         "env": settings.app_env,
+        "version": app.version,
+        "uptime_seconds": round(time.time() - _STARTED_AT, 1),
         "asr_provider": settings.asr_provider,
         "translation_provider": settings.translation_provider,
+        "websocket": {
+            "endpoint": "/ws/translate",
+            "origin_policy": "allowlist"
+            if settings.ws_allowed_origins
+            else "any",
+        },
+        "providers": {
+            "deepgram": {
+                "configured": bool(settings.deepgram_api_key),
+            },
+            "cloud_translation": {
+                "configured": bool(settings.cloud_translation_api_key),
+            },
+            "nllb": {
+                "mode": "service" if settings.nllb_service_url else "in_process",
+                "service_configured": bool(settings.nllb_service_url),
+                "in_process_available": _offline_runtime_available(),
+            },
+        },
     }
 
 

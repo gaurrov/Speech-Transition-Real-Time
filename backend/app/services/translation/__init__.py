@@ -31,6 +31,29 @@ def _offline_runtime_available() -> bool:
     )
 
 
+def _nllb_fallback_available(settings: Settings) -> bool:
+    """True when the NLLB fallback path can actually serve translations.
+
+    In production the fallback is usually a separate NLLB service
+    (``nllb_service_url``); on dev machines it can be the in-process model
+    (``offline`` extra). Either one counts as "available".
+    """
+    return bool(settings.nllb_service_url) or _offline_runtime_available()
+
+
+def _make_nllb_provider(settings: Settings) -> TranslationProvider:
+    """Build the NLLB fallback provider: remote service or in-process."""
+    if settings.nllb_service_url:
+        from app.services.translation.nllb_service_provider import (
+            NLLBServiceProvider,
+        )
+
+        return NLLBServiceProvider(settings=settings)
+    from app.services.translation.nllb_provider import NLLBTranslationProvider
+
+    return NLLBTranslationProvider(settings=settings)
+
+
 def warn_on_translation_misconfiguration(settings: Settings) -> None:
     """Log a clear one-time warning when the effective translation path is dead.
 
@@ -39,7 +62,7 @@ def warn_on_translation_misconfiguration(settings: Settings) -> None:
     Surfacing that up-front beats a per-utterance ``translation_failed``.
     """
     cloud_configured = bool(settings.cloud_translation_api_key)
-    offline_available = _offline_runtime_available()
+    nllb_available = _nllb_fallback_available(settings)
 
     if settings.translation_provider == "cloud":
         if not cloud_configured:
@@ -47,7 +70,7 @@ def warn_on_translation_misconfiguration(settings: Settings) -> None:
                 "translation_misconfigured",
                 translation_provider="cloud",
                 message=(
-                    "Cloud translation is pinned but CLOUD_TRANSLATION_API_KEY is not "
+                    "Cloud translation is pinned but TRANSLATION_API_KEY is not "
                     "set -- every translation attempt will fail. Set the key in "
                     ".env, or switch TRANSLATION_PROVIDER to a working backend."
                 ),
@@ -55,28 +78,27 @@ def warn_on_translation_misconfiguration(settings: Settings) -> None:
         return
 
     if settings.translation_provider == "nllb":
-        if not offline_available:
+        if not nllb_available:
             logger.warning(
                 "translation_misconfigured",
                 translation_provider="nllb",
                 message=(
-                    "NLLB translation is pinned but the offline runtime is not "
-                    "installed -- install it with `uv sync --extra offline`, otherwise "
-                    "every translation attempt will fail."
+                    "NLLB translation is pinned but no fallback backend is "
+                    "available -- set NLLB_SERVICE_URL to a running NLLB service, "
+                    "or install the `offline` extra with `uv sync --extra offline`."
                 ),
             )
         return
 
     # hybrid
-    if not cloud_configured and not offline_available:
+    if not cloud_configured and not nllb_available:
         logger.warning(
             "translation_misconfigured",
             translation_provider="hybrid",
             message=(
-                "No cloud translation key (CLOUD_TRANSLATION_API_KEY) and the NLLB "
-                "offline runtime is not installed -- every translation attempt will "
-                "fail. Set the key in .env, install the offline extra with "
-                "`uv sync --extra offline`, or both."
+                "No cloud translation key (TRANSLATION_API_KEY) and no NLLB "
+                "fallback (set NLLB_SERVICE_URL or install the `offline` extra) "
+                "-- every translation attempt will fail."
             ),
         )
 
@@ -93,17 +115,20 @@ def create_translation_provider() -> TranslationProvider:
     apply_extra_languages(settings.translation_extra_languages)
 
     if settings.translation_provider == "hybrid":
+        from app.services.translation.cloud_provider import CloudTranslationProvider
         from app.services.translation.hybrid_provider import HybridTranslationProvider
 
-        return HybridTranslationProvider(settings=settings)
+        return HybridTranslationProvider(
+            settings=settings,
+            cloud=CloudTranslationProvider(settings=settings),
+            nllb=_make_nllb_provider(settings),
+        )
     if settings.translation_provider == "cloud":
         from app.services.translation.cloud_provider import CloudTranslationProvider
 
         return CloudTranslationProvider(settings=settings)
     if settings.translation_provider == "nllb":
-        from app.services.translation.nllb_provider import NLLBTranslationProvider
-
-        return NLLBTranslationProvider(settings=settings)
+        return _make_nllb_provider(settings)
     raise TranslationError(
         "translation_config",
         f"Unknown translation provider configured: {settings.translation_provider!r}",

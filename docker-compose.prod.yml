@@ -1,0 +1,60 @@
+# Production Docker deployment.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml --profile nllb up -d --build   (with NLLB fallback)
+#
+# Differences from the dev stack:
+#   - backend is NOT published to the host (internal only; nginx is the single
+#     public entry point on :80)
+#   - JSON structured logging
+#   - everything restarts automatically and nginx depends on a healthy backend
+#   - set CORS_ALLOW_ORIGINS / WS_ALLOWED_ORIGINS / BACKEND_HOST / BACKEND_USE_TLS
+#     in .env for your real domain
+name: translator-prod
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "80:80"
+    environment:
+      # Leave empty to connect same-origin through nginx; set to your API
+      # domain (e.g. api.example.com) for a separate WSS endpoint.
+      BACKEND_HOST: ${BACKEND_HOST:-}
+      BACKEND_USE_TLS: ${BACKEND_USE_TLS:-false}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    init: true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENVIRONMENT: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: json
+      PORT: "8000"
+    restart: unless-stopped
+
+  nllb:
+    build:
+      context: ./nllb
+    profiles: ["nllb"]
+    init: true
+    volumes:
+      - nllb-models:/models
+    environment:
+      HF_HOME: /models
+      NLLB_MODEL_NAME: ${NLLB_MODEL_NAME:-facebook/nllb-200-distilled-600M}
+      NLLB_DEVICE: ${NLLB_DEVICE:-cpu}
+      NLLB_WARM_START: "true"
+    restart: unless-stopped
+
+volumes:
+  nllb-models:

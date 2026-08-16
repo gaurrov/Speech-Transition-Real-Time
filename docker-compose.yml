@@ -1,0 +1,63 @@
+# Local Docker development stack.
+#
+#   docker compose up --build
+#
+# - frontend:  nginx serving the production React build + WebSocket proxy
+# - backend:   FastAPI + uvicorn (published on :8000 for local tooling)
+# - nllb:      OPTIONAL NLLB-200 fallback service -- enable with:
+#              docker compose --profile nllb up --build
+#              (and set NLLB_SERVICE_URL=http://nllb:8000 in .env)
+#
+# Provider API keys come from the .env file (see .env.example). The stack
+# starts without one; /health and the UI simply report the providers as
+# unconfigured.
+name: translator-dev
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "8080:80"
+    environment:
+      # Empty host -> the browser connects same-origin (this nginx), which
+      # proxies /ws/* and /api/* to the backend.
+      BACKEND_HOST: ${BACKEND_HOST:-}
+      BACKEND_USE_TLS: ${BACKEND_USE_TLS:-false}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    init: true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENVIRONMENT: development
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: console
+      PORT: "8000"
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  nllb:
+    build:
+      context: ./nllb
+    profiles: ["nllb"]
+    init: true
+    volumes:
+      - nllb-models:/models
+    environment:
+      HF_HOME: /models
+      NLLB_MODEL_NAME: ${NLLB_MODEL_NAME:-facebook/nllb-200-distilled-600M}
+      NLLB_DEVICE: ${NLLB_DEVICE:-cpu}
+      NLLB_WARM_START: "true"
+    restart: unless-stopped
+
+volumes:
+  nllb-models:

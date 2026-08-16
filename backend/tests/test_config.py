@@ -1,4 +1,6 @@
 """Configuration defaults tests."""
+import os
+
 from app.config import Settings
 
 
@@ -14,3 +16,33 @@ def test_defaults_are_sane() -> None:
     assert settings.llm_refinement_enabled is True
     assert settings.audio_sample_rate == 16_000
     assert settings.cors_allow_origins == ["http://localhost:5173"]
+    assert settings.log_format == "console"
+    assert settings.nllb_service_url is None
+    assert settings.ws_allowed_origins is None
+
+
+def test_environment_alias_maps_to_app_env() -> None:
+    os.environ["ENVIRONMENT"] = "production"
+    try:
+        settings = Settings()
+        assert settings.app_env == "production"
+    finally:
+        del os.environ["ENVIRONMENT"]
+
+
+def test_translation_api_key_alias_maps_to_cloud_key() -> None:
+    os.environ["TRANSLATION_API_KEY"] = "sk-translate"
+    try:
+        settings = Settings()
+        assert settings.cloud_translation_api_key == "sk-translate"
+    finally:
+        del os.environ["TRANSLATION_API_KEY"]
+
+
+def test_nllb_service_url_setting() -> None:
+    os.environ["NLLB_SERVICE_URL"] = "http://nllb:8000"
+    try:
+        settings = Settings()
+        assert settings.nllb_service_url == "http://nllb:8000"
+    finally:
+        del os.environ["NLLB_SERVICE_URL"]

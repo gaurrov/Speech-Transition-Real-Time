@@ -32,6 +32,12 @@ logger = structlog.get_logger(__name__)
 _MODEL_CACHE: dict[tuple[str, str], tuple[object, object]] = {}
 _MODEL_CACHE_LOCK = threading.Lock()
 
+# Serializes the tokenizer.src_lang mutation + encode span. The tokenizer is
+# shared process-wide via _MODEL_CACHE and each translation runs on its own
+# asyncio.to_thread worker, so two sessions translating different source
+# languages concurrently would otherwise race on tokenizer.src_lang.
+_TOKENIZER_LOCK = threading.Lock()
+
 
 def _reset_model_cache() -> None:
     """Clear the shared model cache (used by tests for isolation)."""
@@ -130,14 +136,15 @@ class NLLBTranslationProvider(TranslationProvider):
 
         tokenizer = self._tokenizer
         model = self._model
-        tokenizer.src_lang = nllb_code(source_language)   # <-- set before encoding
         target_token = nllb_code(target_language)
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self._settings.nllb_max_length,
-        )
+        with _TOKENIZER_LOCK:
+            tokenizer.src_lang = nllb_code(source_language)  # set before encoding
+            inputs = tokenizer(
+                text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=self._settings.nllb_max_length,
+            )
         with torch.inference_mode():
             outputs = model.generate(
                 **inputs,

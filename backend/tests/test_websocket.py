@@ -686,3 +686,60 @@ def test_refinement_is_skipped_for_clean_finals(
         assert saw_refined is False
         # The LLM was never called for a transcript that needs no work.
         assert refiner.calls == []
+
+
+# --- WebSocket Origin policy -------------------------------------------------
+
+
+def test_origin_policy_allows_whitelisted_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import Settings
+
+    monkeypatch.setattr(
+        translate_stream,
+        "get_settings",
+        lambda: Settings(ws_allowed_origins=["https://app.example.com"]),
+    )
+    with TestClient(app).websocket_connect(
+        "/ws/translate", headers={"Origin": "https://app.example.com"}
+    ) as ws:
+        ws.send_json({"type": "start_session", "session_id": "origin-ok"})
+        started = _configure(ws, "origin-ok")
+        assert started["type"] == "session_started"
+
+
+def test_origin_policy_rejects_disallowed_origins(monkeypatch: pytest.MonkeyPatch) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from app.config import Settings
+
+    monkeypatch.setattr(
+        translate_stream,
+        "get_settings",
+        lambda: Settings(ws_allowed_origins=["https://app.example.com"]),
+    )
+    with (
+        pytest.raises(WebSocketDisconnect) as exc_info,
+        TestClient(app).websocket_connect(
+            "/ws/translate", headers={"Origin": "https://evil.example.com"}
+        ) as ws,
+    ):
+        ws.receive_json()
+    assert exc_info.value.code == 1008
+
+
+def test_origin_policy_rejects_missing_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from app.config import Settings
+
+    monkeypatch.setattr(
+        translate_stream,
+        "get_settings",
+        lambda: Settings(ws_allowed_origins=["https://app.example.com"]),
+    )
+    with (
+        pytest.raises(WebSocketDisconnect) as exc_info,
+        TestClient(app).websocket_connect("/ws/translate") as ws,
+    ):
+        ws.receive_json()
+    assert exc_info.value.code == 1008

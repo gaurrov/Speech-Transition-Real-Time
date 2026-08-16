@@ -1,4 +1,4 @@
-"""Structured logging setup, shared across the app."""
+"""Structured logging setup for the NLLB service (JSON in production)."""
 from __future__ import annotations
 
 import logging
@@ -6,18 +6,17 @@ import logging
 import structlog
 
 
-def configure_logging(level: str = "INFO", format: str = "console") -> None:
+def configure_logging(level: str = "INFO", fmt: str = "json") -> None:
     logging.basicConfig(format="%(message)s", level=level)
     renderer = (
         structlog.processors.JSONRenderer()
-        if format == "json"
+        if fmt == "json"
         else structlog.dev.ConsoleRenderer()
     )
     structlog.configure(
         processors=[
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.add_log_level,
-            structlog.processors.StackInfoRenderer(),
             renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(logging.getLevelName(level)),

@@ -12,11 +12,13 @@ and punctuation. It ships as a compact, always-on-top **desktop companion window
 > results, punctuation + smart formatting, multilingual / language-detection,
 > client-silence-driven utterance finalization, automatic reconnects, and
 > measured ASR **and** translation **and** LLM-refinement latency. The backend
-> boots, serves `/health`, and passes 95 tests (transport + Deepgram provider
+> boots, serves `/health`, and passes 114 tests (transport + Deepgram provider
 > suite against a fake server + language-registry/cloud/NLLB/hybrid provider
 > suites + LLM refinement provider/transport suites); the frontend typechecks,
 > lints, builds, and renders real-time partial/final transcripts that freeze on
-> finalization, plus live translations and post-hoc refined transcripts.
+> finalization, plus live translations and post-hoc refined transcripts. The
+> whole server side is also deployable with Docker (see "Deploying with Docker"
+> below and `docs/DOCKER.md`).
 
 ## What this is
 
@@ -123,6 +125,27 @@ cd frontend && npm run lint
 cd frontend && npm run typecheck
 cd frontend && npm run build
 ```
+
+## Deploying with Docker
+
+The server side is fully containerized (nginx reverse proxy + FastAPI backend +
+optional NLLB-200 fallback service); the Electron window stays on your machine
+and just connects to the deployed WebSocket endpoint. See
+[`docs/DOCKER.md`](docs/DOCKER.md) for the full guide.
+
+```bash
+# Development stack (frontend :8080, backend :8000, WS through nginx)
+docker compose up --build
+
+# Production stack (frontend on :80 only)
+docker compose -f docker-compose.prod.yml up -d --build
+
+# Add the offline NLLB translation service (--profile nllb)
+# and set NLLB_SERVICE_URL=http://nllb:8000 in .env
+docker compose --profile nllb up -d --build
+```
+
+Port 8000 conflicts with a locally running backend? `BACKEND_PORT=18000 docker compose up -d`.
 
 ## Desktop companion (Electron)
 

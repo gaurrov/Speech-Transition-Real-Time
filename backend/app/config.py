@@ -24,9 +24,20 @@ class Settings(BaseSettings):
     )
 
     # --- General ---
-    app_env: Literal["development", "staging", "production"] = "development"
+    # Accepts both ENVIRONMENT (preferred) and the older APP_ENV spelling.
+    app_env: Literal["development", "staging", "production"] = Field(
+        default="development",
+        validation_alias=AliasChoices("ENVIRONMENT", "APP_ENV"),
+    )
     log_level: str = "INFO"
+    # "console" = pretty dev rendering, "json" = structured JSON lines (prod).
+    log_format: Literal["console", "json"] = "console"
     cors_allow_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    # Optional WebSocket Origin allowlist (cross-site WebSocket hijacking
+    # protection). When set to a non-empty list, /ws/translate rejects
+    # handshakes whose Origin header is not listed. Leave empty to allow any
+    # Origin (required for the Electron file:// client unless you list it).
+    ws_allowed_origins: list[str] | None = None
 
     # --- ASR (Automatic Speech Recognition) ---
     asr_provider: Literal["deepgram"] = "deepgram"
@@ -50,7 +61,14 @@ class Settings(BaseSettings):
     # "hybrid" (default) tries the low-latency cloud provider first and falls
     # back to NLLB-200 offline; "cloud"/"nllb" pin a single path.
     translation_provider: Literal["hybrid", "cloud", "nllb"] = "hybrid"
-    cloud_translation_api_key: str | None = None
+    # Accepts either TRANSLATION_API_KEY (preferred) or the older
+    # CLOUD_TRANSLATION_API_KEY spelling.
+    cloud_translation_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "TRANSLATION_API_KEY", "CLOUD_TRANSLATION_API_KEY"
+        ),
+    )
     cloud_translation_provider_name: Literal["google", "deepl", "azure"] = "google"
     # Google Cloud Translation v2 REST endpoint. Override for tests / proxies.
     cloud_translation_endpoint: str = "https://translation.googleapis.com/language/translate/v2"
@@ -62,6 +80,11 @@ class Settings(BaseSettings):
     nllb_device: Literal["cpu", "cuda"] = "cpu"
     nllb_max_length: int = 128
     nllb_num_beams: int = 4
+    # When set, the NLLB fallback is served by a separate, internal NLLB
+    # service over HTTP instead of loading torch in-process (keeps the main
+    # backend image small). The service is never exposed publicly.
+    nllb_service_url: str | None = None
+    nllb_service_timeout_sec: float = 30.0
 
     # --- LLM (async post-processing / refinement) ---
     # Accepts either ENABLE_LLM_REFINEMENT (preferred) or the older

@@ -1,0 +1,10 @@
+// Generated at container startup from BACKEND_HOST / BACKEND_USE_TLS.
+// Do not edit inside the container -- set the env vars instead.
+//
+// backendHost: "" -> same origin that served the page (nginx reverse proxy).
+//               Set e.g. "api.example.com" for a separate API domain.
+// useTls: true -> wss://, false -> ws://
+window.TRANSLATOR_CONFIG = {
+  backendHost: "${BACKEND_HOST}",
+  useTls: ${BACKEND_USE_TLS},
+}

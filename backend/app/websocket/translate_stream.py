@@ -769,6 +769,17 @@ async def translate_stream(websocket: WebSocket) -> None:
     session: Session | None = None
     logger.info("ws_connected", websocket=id(websocket))
 
+    # Optional Origin allowlist (cross-site WebSocket hijacking protection).
+    # Browsers do not enforce CORS on WebSocket handshakes, so the server must
+    # check the Origin itself when a policy is configured.
+    allowed_origins = get_settings().ws_allowed_origins
+    if allowed_origins:
+        origin = websocket.headers.get("origin")
+        if origin is None or origin not in allowed_origins:
+            logger.warning("ws_origin_rejected", websocket=id(websocket), origin=origin)
+            await websocket.close(code=1008)
+            return
+
     try:
         while True:
             message = await websocket.receive()
