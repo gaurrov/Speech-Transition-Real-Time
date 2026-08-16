@@ -12,7 +12,7 @@ export interface TranslatorPreferences {
 const STORAGE_KEY = "live-translator-preferences"
 
 const DEFAULTS: TranslatorPreferences = {
-  sourceLanguage: "auto",
+  sourceLanguage: "en",
   targetLanguage: "hi",
   windowMode: "expanded",
   sessionMode: "live",

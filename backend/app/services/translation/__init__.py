@@ -1,7 +1,11 @@
 """Translation provider registry. Only the abstraction is imported here."""
 from __future__ import annotations
 
-from app.config import get_settings
+import importlib.util
+
+import structlog
+
+from app.config import Settings, get_settings
 from app.services.translation.base import TranslationError, TranslationProvider
 from app.services.translation.languages import apply_extra_languages
 
@@ -9,7 +13,72 @@ __all__ = [
     "TranslationError",
     "TranslationProvider",
     "create_translation_provider",
+    "warn_on_translation_misconfiguration",
 ]
+
+logger = structlog.get_logger(__name__)
+
+
+def _offline_runtime_available() -> bool:
+    """True when the NLLB offline runtime (torch + transformers) is installed.
+
+    Uses ``find_spec`` so the check stays cheap and never imports the heavy
+    packages at startup.
+    """
+    return (
+        importlib.util.find_spec("torch") is not None
+        and importlib.util.find_spec("transformers") is not None
+    )
+
+
+def warn_on_translation_misconfiguration(settings: Settings) -> None:
+    """Log a clear one-time warning when the effective translation path is dead.
+
+    A fresh install ships with ``translation_provider="hybrid"`` and no cloud
+    API key, so every utterance fails (cloud -> NLLB fallback -> both error).
+    Surfacing that up-front beats a per-utterance ``translation_failed``.
+    """
+    cloud_configured = bool(settings.cloud_translation_api_key)
+    offline_available = _offline_runtime_available()
+
+    if settings.translation_provider == "cloud":
+        if not cloud_configured:
+            logger.warning(
+                "translation_misconfigured",
+                translation_provider="cloud",
+                message=(
+                    "Cloud translation is pinned but CLOUD_TRANSLATION_API_KEY is not "
+                    "set -- every translation attempt will fail. Set the key in "
+                    ".env, or switch TRANSLATION_PROVIDER to a working backend."
+                ),
+            )
+        return
+
+    if settings.translation_provider == "nllb":
+        if not offline_available:
+            logger.warning(
+                "translation_misconfigured",
+                translation_provider="nllb",
+                message=(
+                    "NLLB translation is pinned but the offline runtime is not "
+                    "installed -- install it with `uv sync --extra offline`, otherwise "
+                    "every translation attempt will fail."
+                ),
+            )
+        return
+
+    # hybrid
+    if not cloud_configured and not offline_available:
+        logger.warning(
+            "translation_misconfigured",
+            translation_provider="hybrid",
+            message=(
+                "No cloud translation key (CLOUD_TRANSLATION_API_KEY) and the NLLB "
+                "offline runtime is not installed -- every translation attempt will "
+                "fail. Set the key in .env, install the offline extra with "
+                "`uv sync --extra offline`, or both."
+            ),
+        )
 
 
 def create_translation_provider() -> TranslationProvider:

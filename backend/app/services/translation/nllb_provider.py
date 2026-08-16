@@ -125,14 +125,12 @@ class NLLBTranslationProvider(TranslationProvider):
         model.eval()
         return model, tokenizer
 
-    def _translate_engine(
-        self, text: str, source_language: str, target_language: str
-    ) -> str:
-        """Generate the translation with the loaded model (blocking)."""
+    def _translate_engine(self, text: str, source_language: str, target_language: str) -> str:
         import torch
 
         tokenizer = self._tokenizer
         model = self._model
+        tokenizer.src_lang = nllb_code(source_language)   # <-- set before encoding
         target_token = nllb_code(target_language)
         inputs = tokenizer(
             text,

@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.services.translation import warn_on_translation_misconfiguration
 from app.utils.logging import configure_logging
 from app.websocket.translate_stream import router as translate_stream_router
 
@@ -27,6 +28,7 @@ logger = structlog.get_logger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     logger.info("startup", env=settings.app_env)
+    warn_on_translation_misconfiguration(settings)
     yield
 
 
