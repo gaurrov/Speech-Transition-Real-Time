@@ -59,7 +59,7 @@ export function TranscriptPanel({ segments, partial, status }: TranscriptPanelPr
         ))}
         {partial && (
           <p className="flex items-start gap-2 text-[15px] leading-relaxed italic text-slate-500">
-            <span className="mt-1.5 h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-500" />
+            <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
             {partial}
           </p>
         )}

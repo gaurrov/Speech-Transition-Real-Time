@@ -190,7 +190,10 @@ def test_partial_and_final_transcripts_are_forwarded(
         provider.script(
             [
                 TranscriptSegment(
-                    segment_id="seg-0", text="We need to discuss", is_final=False
+                    segment_id="seg-0",
+                    text="We need to discuss",
+                    is_final=False,
+                    asr_latency_ms=120.0,
                 ),
                 TranscriptSegment(
                     segment_id="seg-0",
@@ -210,6 +213,11 @@ def test_partial_and_final_transcripts_are_forwarded(
         assert first["is_final"] is False
         assert first["segment_id"] == "seg-0"
 
+        partial_latency = ws.receive_json()
+        assert partial_latency["type"] == "latency"
+        assert partial_latency["segment_id"] == "seg-0"
+        assert partial_latency["asr_partial_ms"] == 120.0
+
         final = ws.receive_json()
         assert final["type"] == "final_transcript"
         assert final["text"] == "We need to discuss the project."
@@ -222,6 +230,7 @@ def test_partial_and_final_transcripts_are_forwarded(
         assert latency["type"] == "latency"
         assert latency["segment_id"] == "seg-0"
         assert latency["asr_ms"] == 180.0
+        assert latency["asr_final_ms"] == 180.0
 
         translation = ws.receive_json()
         assert translation["type"] == "translation"
@@ -237,6 +246,12 @@ def test_partial_and_final_transcripts_are_forwarded(
         assert translation_latency["type"] == "latency"
         assert translation_latency["segment_id"] == "seg-0"
         assert translation_latency["translation_ms"] >= 0
+        # Server-side end-to-end (T2 -> T6) = asr final + translation.
+        assert translation_latency["asr_final_ms"] == 180.0
+        assert (
+            translation_latency["end_to_end_ms"]
+            >= translation_latency["translation_ms"]
+        )
 
         ws.send_json({"type": "stop_session", "session_id": session_id})
         assert ws.receive_json()["type"] == "session_stopped"
@@ -627,3 +642,47 @@ def test_refinement_is_skipped_when_disabled(
             if event["type"] == "session_stopped":
                 break
         assert saw_refined is False
+
+
+# --- Latency instrumentation + LLM call avoidance ---------------------------
+
+
+def test_looks_clean_heuristic() -> None:
+    clean = translate_stream._looks_clean
+    assert clean("This sentence is already clean.") is True
+    assert clean("The project ships on Friday.") is True
+    # Needs the LLM: no terminal punctuation, lowercase start, fragments...
+    assert clean("the project ships on friday") is False
+    assert clean("no punctuation") is False
+    assert clean("Short.") is False  # fragment (< 12 chars)
+    assert clean("This has  double spaces.") is False
+    assert clean("This has repeated repeated words.") is False
+    assert clean("API API needs cleanup.") is False
+    assert clean("HELLO WORLD THIS IS LOUD.") is False
+
+
+def test_refinement_is_skipped_for_clean_finals(
+    monkeypatch, fake_asr_factory, fake_translation_factory, fake_llm_factory
+) -> None:
+    session_id = "ref-clean"
+    monkeypatch.setattr(translate_stream, "_looks_clean", lambda text: True)
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, session_id)
+        provider = fake_asr_factory[-1]
+        refiner = fake_llm_factory[-1]
+        provider.script(
+            [TranscriptSegment(segment_id="seg-1", text="Fine.", is_final=True)]
+        )
+
+        _drain_until(ws, "translation", 1)
+        saw_refined = False
+        ws.send_json({"type": "stop_session", "session_id": session_id})
+        for _ in range(30):
+            event = ws.receive_json()
+            if event["type"] == "refined_transcript":
+                saw_refined = True
+            if event["type"] == "session_stopped":
+                break
+        assert saw_refined is False
+        # The LLM was never called for a transcript that needs no work.
+        assert refiner.calls == []

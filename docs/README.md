@@ -21,3 +21,5 @@ Written so far:
 - `translation.md` — hybrid cloud → NLLB-200 translation fallback.
 - `refinement.md` — async LLM transcript refinement: prompt scope, config,
   protocol, failure handling.
+- `performance.md` — end-to-end latency instrumentation (T0–T9), measured
+  numbers, bottlenecks, and optimizations.

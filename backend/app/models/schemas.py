@@ -165,18 +165,45 @@ class RefinedTranscriptEvent(BaseModel):
 
 
 class LatencyEvent(BaseModel):
-    """Per-segment timing report (ms)."""
+    """
+    Per-segment timing report (ms).
+
+    Timestamp legend (measured at the backend unless noted as client-side):
+      T2 = backend receives the audio content a result covers
+      T3 = ASR partial result        T4 = ASR final result
+      T5 = translation request       T6 = translation response
+      T8 = LLM refinement starts     T9 = LLM refinement completes
+
+    Fields set by the server:
+      asr_partial_ms = T3 - T2   asr_final_ms = T4 - T2
+      translation_ms = T6 - T5   refinement_ms = T9 - T8
+      end_to_end_ms  = T6 - T2 (live path only; refinement excluded)
+
+    Fields filled in by the client renderer (dev-only):
+      ui_ms                 = T7 - T6 (server send -> UI receipt estimate)
+      final_to_translation_ms = T7 - T4' (client receipt of final -> translation)
+      network_ms            = client send -> backend audio ack (round-trip)
+      speech_to_translation_ms = T7 - T0, composed client-side from the
+                                server end_to_end_ms plus the UI gap.
+    """
 
     type: Literal["latency"] = "latency"
     session_id: str
     segment_id: str
     asr_ms: float | None = None
+    asr_partial_ms: float | None = None
+    asr_final_ms: float | None = None
     translation_ms: float | None = None
     # Refinement latency is measured separately from the live path: it is the
     # time spent on the async LLM correction pass, which never gates the
     # transcript/translation that reached the client first.
     refinement_ms: float | None = None
     end_to_end_ms: float | None = None
+    # --- client-derived fields (never sent by the server) ---
+    ui_ms: float | None = None
+    final_to_translation_ms: float | None = None
+    network_ms: float | None = None
+    speech_to_translation_ms: float | None = None
 
 
 class AudioReceivedEvent(BaseModel):

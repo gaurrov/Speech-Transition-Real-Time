@@ -10,12 +10,12 @@ const STATUS_META: Record<SessionStatus, StatusMeta> = {
   idle: { label: "Idle", dot: "bg-slate-400", text: "text-slate-500" },
   connecting: { label: "Connecting", dot: "bg-amber-400 animate-pulse", text: "text-amber-600" },
   connected: { label: "Connected", dot: "bg-sky-500", text: "text-sky-600" },
-  listening: { label: "Listening", dot: "bg-emerald-500 animate-pulse", text: "text-emerald-600" },
+  listening: { label: "Listening", dot: "bg-emerald-500", text: "text-emerald-600" },
   speaking: { label: "Speaking", dot: "bg-emerald-500", text: "text-emerald-700" },
   silence: { label: "Silence detected", dot: "bg-slate-400", text: "text-slate-500" },
-  translating: { label: "Translating", dot: "bg-violet-500 animate-pulse", text: "text-violet-600" },
+  translating: { label: "Translating", dot: "bg-violet-500", text: "text-violet-600" },
   reconnecting: { label: "Reconnecting", dot: "bg-amber-400 animate-pulse", text: "text-amber-600" },
-  error: { label: "Error", dot: "bg-rose-500 animate-pulse", text: "text-rose-600" },
+  error: { label: "Error", dot: "bg-rose-500", text: "text-rose-600" },
   disconnected: { label: "Disconnected", dot: "bg-slate-400", text: "text-slate-500" },
 }
 

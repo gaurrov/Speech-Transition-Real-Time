@@ -205,8 +205,18 @@ async def test_cloud_health_check_and_close() -> None:
 # --- NLLB provider (engine is monkeypatched; torch is not installed) ---------
 
 
+@pytest.fixture
+def clear_nllb_cache():
+    """Reset the process-wide NLLB model cache so monkeypatched loads re-run."""
+    from app.services.translation.nllb_provider import _reset_model_cache
+
+    _reset_model_cache()
+    yield
+    _reset_model_cache()
+
+
 @pytest.mark.asyncio
-async def test_nllb_warm_up_missing_deps_raises_unavailable(monkeypatch) -> None:
+async def test_nllb_warm_up_missing_deps_raises_unavailable(clear_nllb_cache, monkeypatch) -> None:
     provider = NLLBTranslationProvider(settings=Settings())
 
     def _load():
@@ -219,7 +229,7 @@ async def test_nllb_warm_up_missing_deps_raises_unavailable(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_nllb_warm_up_load_error_raises_unavailable(monkeypatch) -> None:
+async def test_nllb_warm_up_load_error_raises_unavailable(clear_nllb_cache, monkeypatch) -> None:
     provider = NLLBTranslationProvider(settings=Settings())
 
     def _load():
@@ -232,7 +242,7 @@ async def test_nllb_warm_up_load_error_raises_unavailable(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_nllb_translate_calls_engine_with_language_codes(monkeypatch) -> None:
+async def test_nllb_translate_calls_engine_with_language_codes(clear_nllb_cache, monkeypatch) -> None:
     provider = NLLBTranslationProvider(settings=Settings())
     calls = []
 
@@ -260,7 +270,7 @@ async def test_nllb_translate_calls_engine_with_language_codes(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_nllb_translate_unsupported_language_fails_fast(monkeypatch) -> None:
+async def test_nllb_translate_unsupported_language_fails_fast(clear_nllb_cache, monkeypatch) -> None:
     provider = NLLBTranslationProvider(settings=Settings())
     called = {"engine": False}
 

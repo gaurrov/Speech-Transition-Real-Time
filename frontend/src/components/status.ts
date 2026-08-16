@@ -16,14 +16,14 @@ const META: Record<SessionStatus, StatusMeta> = {
   connected: { label: "Connected", dotClass: "bg-sky-500", textClass: "text-sky-600" },
   listening: {
     label: "Listening",
-    dotClass: "bg-emerald-500 animate-pulse",
+    dotClass: "bg-emerald-500",
     textClass: "text-emerald-600",
   },
   speaking: { label: "Speaking", dotClass: "bg-emerald-500", textClass: "text-emerald-700" },
-  silence: { label: "Listening", dotClass: "bg-emerald-500 animate-pulse", textClass: "text-emerald-600" },
+  silence: { label: "Listening", dotClass: "bg-emerald-500", textClass: "text-emerald-600" },
   translating: {
     label: "Translating",
-    dotClass: "bg-violet-500 animate-pulse",
+    dotClass: "bg-violet-500",
     textClass: "text-violet-600",
   },
   reconnecting: {
@@ -31,7 +31,7 @@ const META: Record<SessionStatus, StatusMeta> = {
     dotClass: "bg-amber-400 animate-pulse",
     textClass: "text-amber-600",
   },
-  error: { label: "Error", dotClass: "bg-rose-500 animate-pulse", textClass: "text-rose-600" },
+  error: { label: "Error", dotClass: "bg-rose-500", textClass: "text-rose-600" },
   disconnected: { label: "Offline", dotClass: "bg-slate-400", textClass: "text-slate-500" },
 }
 

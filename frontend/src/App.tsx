@@ -253,7 +253,8 @@ export default function App() {
               vadError={capture.vadError}
               vadProbability={capture.vadProbability}
               vadSilenceThresholdMs={vadSilenceThresholdMs}
-              refinementMs={session.latency?.refinement_ms ?? null}
+              latency={session.latency}
+              latencyHistory={session.latencyHistory}
             />
           </div>
         )}

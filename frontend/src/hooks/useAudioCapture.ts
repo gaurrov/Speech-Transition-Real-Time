@@ -265,12 +265,19 @@ export function useAudioCapture({
         const provider = new SileroVADProvider()
         vadProviderRef.current = provider
         provider.configure(vadConfigRef.current)
+        // The Silero model emits a probability every VAD frame (~32 ms). Throttle
+        // the React state update to ~4 Hz so the renderer is not re-rendered
+        // tens of times per second just to show a dev-only diagnostic number.
+        let lastProbStateAt = 0
         provider.onEvent((vadEvent) => {
-          setVadProbability(vadEvent.probability)
+          const now = performance.now()
+          if (now - lastProbStateAt >= 250) {
+            lastProbStateAt = now
+            setVadProbability(vadEvent.probability)
+          }
           onVADEventRef.current?.(vadEvent)
         })
         provider.onStateChange(setVadStatus)
-        provider.onProbability(setVadProbability)
         // Non-blocking: streaming starts immediately; the model loads in the
         // background and frames are buffered by the worker until it is ready.
         provider

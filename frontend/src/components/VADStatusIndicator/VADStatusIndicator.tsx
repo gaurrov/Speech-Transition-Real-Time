@@ -32,7 +32,7 @@ export function VADStatusIndicator({
   } else if (status === "silence") {
     meta = { label: "Silence detected", dot: "border-slate-400", text: "text-slate-500" }
   } else {
-    meta = { label: "Listening", dot: "bg-emerald-500 animate-pulse", text: "text-emerald-600" }
+    meta = { label: "Listening", dot: "bg-emerald-500", text: "text-emerald-600" }
   }
 
   return (

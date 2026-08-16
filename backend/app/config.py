@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     llm_context_segments: int = 4
     # Override for proxies/tests; defaults to the provider's public endpoint.
     llm_endpoint: str | None = None
+    # Skip an LLM refinement call entirely when the finalized transcript
+    # already looks clean (proper punctuation, capitalization, no duplicate
+    # words). Saves an unnecessary round-trip per well-formed utterance.
+    llm_skip_when_clean: bool = True
 
     # --- VAD (server-side awareness of client-side Silero VAD events) ---
     silence_finalize_ms: int = 700  # silence duration that finalizes an utterance

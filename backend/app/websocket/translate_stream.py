@@ -24,6 +24,7 @@ Per-session flow:
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import time
 import uuid
@@ -52,6 +53,36 @@ _AUDIO_BYTES_PER_SECOND_BY_ENCODING = {"linear16": 2, "opus": 1}
 _AUDIO_ACK_INTERVAL_MS = 1000
 
 
+def _looks_clean(text: str) -> bool:
+    """Cheap heuristic: is this transcript already well-formed enough to skip
+    an LLM refinement round-trip?
+
+    Conservative by design -- it only returns True when the text almost
+    certainly needs no correction, so quality-sensitive cases still reach the
+    LLM:
+      * ends in sentence punctuation
+      * starts with a capital letter
+      * no double spaces, no repeated words, no long all-caps runs
+    Short/fragmentary utterances are never skipped (they usually need the LLM).
+    """
+    t = text.strip()
+    if not t:
+        return True
+    if len(t) < 12:
+        return False
+    if t[-1] not in ".!?":
+        return False
+    if t[0].islower():
+        return False
+    if "  " in t:
+        return False
+    words = t.split()
+    if any(a == b for a, b in itertools.pairwise(words)):
+        return False
+    # No long all-caps run (e.g. an uncorrected acronym sequence like "API API").
+    return not any(len(w) >= 5 and w.isupper() for w in words)
+
+
 class Session:
     """One active translation session bound to a single WebSocket connection."""
 
@@ -73,7 +104,9 @@ class Session:
         self.asr_task: asyncio.Task[None] | None = None
         self.silence_detector: SilenceDetector | None = None
         self.translator: TranslationProvider | None = None
-        self.translation_queue: asyncio.Queue[tuple[str, str]] | None = None
+        self.translation_queue: (
+            asyncio.Queue[tuple[str, str, float | None]] | None
+        ) = None
         self.translation_task: asyncio.Task[None] | None = None
         # Async LLM refinement: a separate, non-blocking worker that corrects
         # finalized segments after the live caption/translation already
@@ -242,17 +275,38 @@ class Session:
                     )
                 )
                 if segment.asr_latency_ms is not None:
-                    await self.send_event(
-                        schemas.LatencyEvent(
-                            session_id=self.session_id,
-                            segment_id=segment.segment_id,
-                            asr_ms=round(segment.asr_latency_ms, 1),
+                    # asr_latency_ms is T2 (content received) -> result emitted.
+                    latency = round(segment.asr_latency_ms, 1)
+                    if segment.is_final:
+                        await self.send_event(
+                            schemas.LatencyEvent(
+                                session_id=self.session_id,
+                                segment_id=segment.segment_id,
+                                asr_ms=latency,
+                                asr_final_ms=latency,
+                            )
                         )
-                    )
+                    else:
+                        await self.send_event(
+                            schemas.LatencyEvent(
+                                session_id=self.session_id,
+                                segment_id=segment.segment_id,
+                                asr_ms=latency,
+                                asr_partial_ms=latency,
+                            )
+                        )
                 # Only finalized, meaningful utterances are translated --
                 # partials stream straight to the client and never enqueue.
+                # The ASR final latency is threaded through so the translation
+                # latency report can carry a true server-side end-to-end figure.
                 if segment.is_final and self.translation_queue is not None:
-                    self.translation_queue.put_nowait((segment.segment_id, segment.text))
+                    self.translation_queue.put_nowait(
+                        (
+                            segment.segment_id,
+                            segment.text,
+                            segment.asr_latency_ms,
+                        )
+                    )
 
                 # Async LLM refinement: enqueue right after finalization, but
                 # NEVER await the result before the final transcript/translation
@@ -300,7 +354,7 @@ class Session:
         if config is None or translator is None or queue is None:
             return
         while True:
-            segment_id, text = await queue.get()
+            segment_id, text, asr_final_ms = await queue.get()
             started = time.monotonic()
             try:
                 result = await translator.translate(
@@ -343,6 +397,14 @@ class Session:
                 continue
 
             translation_ms = round((time.monotonic() - started) * 1000, 1)
+            # Server-side live-path end-to-end: T2 -> T6. ASR final latency
+            # ends at T4 and translation begins immediately after (T5 ~ T4),
+            # so end_to_end = asr_final + translation. Refinement is excluded.
+            end_to_end_ms = (
+                round(asr_final_ms + translation_ms, 1)
+                if asr_final_ms is not None
+                else None
+            )
             await self.send_event(
                 schemas.TranslationEvent(
                     session_id=self.session_id,
@@ -359,7 +421,11 @@ class Session:
                 schemas.LatencyEvent(
                     session_id=self.session_id,
                     segment_id=result.segment_id,
+                    asr_final_ms=round(asr_final_ms, 1)
+                    if asr_final_ms is not None
+                    else None,
                     translation_ms=translation_ms,
+                    end_to_end_ms=end_to_end_ms,
                 )
             )
 
@@ -377,6 +443,13 @@ class Session:
             return
         while True:
             segment_id, text, language, context = await queue.get()
+            if self.settings.llm_skip_when_clean and _looks_clean(text):
+                logger.debug(
+                    "refinement_skipped_clean",
+                    session_id=self.session_id,
+                    segment_id=segment_id,
+                )
+                continue
             started = time.monotonic()
             result = None
             try:
@@ -419,7 +492,12 @@ class Session:
     async def send_event(self, event: schemas.ServerEvent) -> None:
         async with self._send_lock:
             try:
-                await self.websocket.send_json(event.model_dump())
+                # Serialize once to JSON-safe primitives (compact, like the
+                # built-in send_json); audio stays binary on the wire.
+                text = json.dumps(
+                    event.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False
+                )
+                await self.websocket.send_text(text)
             except Exception:
                 logger.debug("ws_send_failed", session_id=self.session_id, event_type=event.type)
 

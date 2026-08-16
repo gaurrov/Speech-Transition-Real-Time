@@ -27,6 +27,8 @@ export interface TranslatorSession {
   translationSegments: TranslationSegment[]
   latestTranslation: TranslationSegment | null
   latency: LatencyReport | null
+  /** Rolling per-utterance latency reports (dev-only panel; newest first). */
+  latencyHistory: LatencyReport[]
   bytesReceived: number
   error: string | null
   start: (session: SessionConfiguration) => void
@@ -57,12 +59,19 @@ export function useTranslatorSession({
   const [translationSegments, setTranslationSegments] = useState<TranslationSegment[]>([])
   const [latestTranslation, setLatestTranslation] = useState<TranslationSegment | null>(null)
   const [latency, setLatency] = useState<LatencyReport | null>(null)
+  const [latencyHistory, setLatencyHistory] = useState<LatencyReport[]>([])
   const [bytesReceived, setBytesReceived] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const clientRef = useRef<StreamingClient | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const modeRef = useRef(mode)
   modeRef.current = mode
+
+  // Dev-only latency bookkeeping: final receipt time per segment (T4' client)
+  // and the last audio chunk send time (T1) used for the network estimate.
+  const finalReceivedAtRef = useRef(new Map<string, number>())
+  const lastAudioSentAtRef = useRef<number>(0)
+  const latestLatencyRef = useRef<LatencyReport | null>(null)
 
   useEffect(() => {
     sessionIdRef.current = sessionId
@@ -118,6 +127,7 @@ export function useTranslatorSession({
           end_ms: event.end_ms,
           confidence: event.confidence,
         }
+        finalReceivedAtRef.current.set(event.segment_id, performance.now())
         setTranscriptSegments((prev) => [
           ...prev.filter((existing) => existing.segment_id !== event.segment_id),
           segment,
@@ -155,11 +165,50 @@ export function useTranslatorSession({
           ),
         )
         break
-      case "latency":
-        setLatency(event)
+      case "latency": {
+        const now = performance.now()
+        // T7 - T4' (client): gap between receiving the final and its translation.
+        let finalToTranslation: number | null = null
+        if (event.translation_ms != null) {
+          const finalAt = finalReceivedAtRef.current.get(event.segment_id)
+          if (finalAt != null) {
+            finalToTranslation = Math.max(0, now - finalAt)
+            finalReceivedAtRef.current.delete(event.segment_id)
+          }
+        }
+        // Speech -> translation composed from server end-to-end + the UI gap.
+        const serverE2E = event.end_to_end_ms ?? null
+        const speechToTranslation =
+          serverE2E != null && finalToTranslation != null
+            ? Math.round(serverE2E + finalToTranslation)
+            : null
+        const merged: LatencyReport = {
+          ...event,
+          final_to_translation_ms: finalToTranslation,
+          speech_to_translation_ms: speechToTranslation,
+        }
+        latestLatencyRef.current = merged
+        setLatency(merged)
+        setLatencyHistory((prev) => {
+          const next = [merged, ...prev].slice(0, 12)
+          if (next.length > 1 && next[0].segment_id === next[1].segment_id) {
+            next.splice(1, 1)
+          }
+          return next
+        })
         break
+      }
       case "audio_received":
         setBytesReceived(event.bytes)
+        // Dev-only one-way network estimate: half the send->ack round-trip.
+        if (lastAudioSentAtRef.current > 0) {
+          const roundTrip = Math.max(0, performance.now() - lastAudioSentAtRef.current)
+          if (latestLatencyRef.current) {
+            const withNetwork = { ...latestLatencyRef.current, network_ms: Math.round(roundTrip / 2) }
+            latestLatencyRef.current = withNetwork
+            setLatency(withNetwork)
+          }
+        }
         break
       case "error":
         // A translation failure is non-fatal: the session keeps running.
@@ -180,9 +229,13 @@ export function useTranslatorSession({
       setPartialText("")
       setLatestTranslation(null)
       setLatency(null)
+      setLatencyHistory([])
       setBytesReceived(0)
       setStatus("connecting")
       setSessionId(session.session_id)
+      finalReceivedAtRef.current.clear()
+      lastAudioSentAtRef.current = 0
+      latestLatencyRef.current = null
 
       clientRef.current?.close()
       const client = createClient(modeRef.current, {
@@ -199,6 +252,7 @@ export function useTranslatorSession({
   )
 
   const sendAudio = useCallback((bytes: Uint8Array) => {
+    lastAudioSentAtRef.current = performance.now()
     clientRef.current?.sendAudio(bytes)
   }, [])
 
@@ -267,6 +321,7 @@ export function useTranslatorSession({
     translationSegments,
     latestTranslation,
     latency,
+    latencyHistory,
     bytesReceived,
     error,
     start,

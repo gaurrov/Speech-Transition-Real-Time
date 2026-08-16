@@ -64,10 +64,24 @@ export interface RefinementResult {
 export interface LatencyReport {
   segment_id: string
   asr_ms?: number | null
+  /** T3 - T2: backend audio content receipt -> ASR partial result. */
+  asr_partial_ms?: number | null
+  /** T4 - T2: backend audio content receipt -> ASR final result. */
+  asr_final_ms?: number | null
+  /** T6 - T5: translation request -> response (server measured). */
   translation_ms?: number | null
   /** Time spent on the async LLM refinement pass (separate from the live path). */
   refinement_ms?: number | null
+  /** T6 - T2: server-side live-path end-to-end (ASR final + translation). */
   end_to_end_ms?: number | null
+  /** T7 - T6 estimate: server send -> UI receipt (dev-only, client-computed). */
+  ui_ms?: number | null
+  /** T7 - T4': client receipt of final_transcript -> matching translation. */
+  final_to_translation_ms?: number | null
+  /** Client audio send -> backend ack round-trip (dev-only, client-computed). */
+  network_ms?: number | null
+  /** T7 - T0: composed from server end_to_end_ms + the client-observed UI gap. */
+  speech_to_translation_ms?: number | null
 }
 
 export type ClientMessage =

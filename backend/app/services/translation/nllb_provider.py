@@ -14,6 +14,7 @@ so there are no hardcoded language-pair conditions here.
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import structlog
 
@@ -23,6 +24,19 @@ from app.services.translation.base import TranslationError, TranslationProvider
 from app.services.translation.languages import nllb_code
 
 logger = structlog.get_logger(__name__)
+
+# Process-wide model cache shared by every NLLBTranslationProvider instance.
+# Loading torch + a 600M-parameter model takes seconds and must happen at most
+# once per process (keyed by model name + device), otherwise every session start
+# would pay the full load cost again.
+_MODEL_CACHE: dict[tuple[str, str], tuple[object, object]] = {}
+_MODEL_CACHE_LOCK = threading.Lock()
+
+
+def _reset_model_cache() -> None:
+    """Clear the shared model cache (used by tests for isolation)."""
+    with _MODEL_CACHE_LOCK:
+        _MODEL_CACHE.clear()
 
 
 class NLLBTranslationProvider(TranslationProvider):
@@ -39,7 +53,7 @@ class NLLBTranslationProvider(TranslationProvider):
             if self._model is None:
                 try:
                     self._model, self._tokenizer = await asyncio.to_thread(
-                        self._load_model
+                        self._get_or_load_model
                     )
                 except ImportError as exc:
                     raise TranslationError(
@@ -52,6 +66,19 @@ class NLLBTranslationProvider(TranslationProvider):
                         "nllb_model_unavailable",
                         f"Failed to load the NLLB model: {exc}",
                     ) from exc
+
+    def _get_or_load_model(self) -> tuple[object, object]:
+        """Return the shared (model, tokenizer), loading them once process-wide."""
+        key = (self._settings.nllb_model_name, self._settings.nllb_device)
+        cached = _MODEL_CACHE.get(key)
+        if cached is not None:
+            return cached
+        with _MODEL_CACHE_LOCK:
+            cached = _MODEL_CACHE.get(key)
+            if cached is None:
+                cached = self._load_model()
+                _MODEL_CACHE[key] = cached
+        return cached
 
     async def translate(
         self,

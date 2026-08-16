@@ -364,8 +364,11 @@ are expected.
 | LLM refinement (async, non-blocking) | 1–3 s, off critical path |
 
 These are targets to validate against. ASR latency is now actually measured
-(`asr_ms` per segment), translation latency is measured too (`translation_ms`
-per segment), and LLM refinement is measured separately (`refinement_ms`, sent
-in the `latency` event after every refinement attempt — success or failure);
-end-to-end timing will be validated against these targets once live providers
-are wired in.
+(`asr_ms` per segment, plus `asr_partial_ms`/`asr_final_ms`), translation
+latency is measured too (`translation_ms` per segment), LLM refinement is
+measured separately (`refinement_ms`, sent in the `latency` event after every
+refinement attempt — success or failure, and skipped when `llm_skip_when_clean`
+detects an already-clean final), and end-to-end timing is composed server-side
+as `end_to_end_ms` (live path only, refinement excluded) and client-side as
+`speech_to_translation_ms`. Measured numbers and the full T0–T9 legend live in
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
