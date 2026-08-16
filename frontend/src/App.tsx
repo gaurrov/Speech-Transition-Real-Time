@@ -195,6 +195,7 @@ export default function App() {
               <TranslationView
                 latest={session.latestTranslation}
                 targetLanguage={targetLanguage}
+                history={session.translationSegments}
               />
             </CompactPanel>
           </div>

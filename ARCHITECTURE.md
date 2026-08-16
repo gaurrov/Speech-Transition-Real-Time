@@ -243,7 +243,8 @@ frontend/src/
 │   ├── CompactPanel/       titled card used for the LIVE SPEECH / TRANSLATION panels
 │   ├── LanguageBar/        source → target selectors (Auto Detect → target)
 │   ├── TranscriptView/     live speech panel (partials in place, finals frozen)
-│   ├── TranslationView/    translation panel; `prominent` layout for compact mode
+│   ├── TranslationView/    translation panel; `prominent` layout for compact
+│   │                       mode, scrollable per-utterance history in expanded
 │   ├── ListeningControls/  Start/Stop footer with ● status
 │   ├── SettingsModal/      mode, VAD tuning, and DEV-only diagnostics
 │   └── ...                 ConnectionDot, ErrorBanner, icons, status helpers
