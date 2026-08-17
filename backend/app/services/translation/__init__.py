@@ -57,9 +57,9 @@ def _make_nllb_provider(settings: Settings) -> TranslationProvider:
 def warn_on_translation_misconfiguration(settings: Settings) -> None:
     """Log a clear one-time warning when the effective translation path is dead.
 
-    A fresh install ships with ``translation_provider="hybrid"`` and no cloud
-    API key, so every utterance fails (cloud -> NLLB fallback -> both error).
-    Surfacing that up-front beats a per-utterance ``translation_failed``.
+    A fresh install ships with ``translation_provider="nllb"`` backed by the
+    NLLB service. This surfaces a warning when that service is unreachable or
+    when a misconfigured cloud/hybrid path has no working backend.
     """
     cloud_configured = bool(settings.cloud_translation_api_key)
     nllb_available = _nllb_fallback_available(settings)
@@ -106,10 +106,11 @@ def warn_on_translation_misconfiguration(settings: Settings) -> None:
 def create_translation_provider() -> TranslationProvider:
     """Instantiate the translation provider selected by configuration.
 
-    ``hybrid`` (default) composes the low-latency cloud provider with the
-    NLLB-200 offline fallback. The transport layer calls this instead of
-    importing a concrete provider, so vendor-specific code never leaks into
-    the pipeline.
+    ``nllb`` (default) uses the NLLB-200 translation service. ``hybrid``
+    composes the low-latency cloud provider with NLLB-200 as a fallback.
+    ``cloud`` pins the cloud provider alone. The transport layer calls this
+    instead of importing a concrete provider, so vendor-specific code never
+    leaks into the pipeline.
     """
     settings = get_settings()
     apply_extra_languages(settings.translation_extra_languages)

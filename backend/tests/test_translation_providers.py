@@ -434,7 +434,10 @@ def test_factory_nllb_mode(monkeypatch) -> None:
     settings = Settings(translation_provider="nllb")
     monkeypatch.setattr("app.services.translation.get_settings", lambda: settings)
     provider = create_translation_provider()
-    assert isinstance(provider, NLLBTranslationProvider)
+    # With nllb_service_url set (default), the factory picks the service provider.
+    from app.services.translation.nllb_service_provider import NLLBServiceProvider
+
+    assert isinstance(provider, NLLBServiceProvider)
 
 
 def test_factory_unknown_mode_raises_config(monkeypatch) -> None:
@@ -444,3 +447,82 @@ def test_factory_unknown_mode_raises_config(monkeypatch) -> None:
     with pytest.raises(TranslationError) as exc:
         create_translation_provider()
     assert exc.value.code == "translation_config"
+
+
+# --- Google Cloud is optional: NLLB works without Google credentials ---------
+
+
+def test_nllb_starts_without_google_key(monkeypatch) -> None:
+    """Application starts with NLLB and no Google key."""
+    settings = Settings(
+        translation_provider="nllb",
+        cloud_translation_api_key=None,
+        nllb_service_url="http://nllb:8001",
+    )
+    monkeypatch.setattr("app.services.translation.get_settings", lambda: settings)
+    provider = create_translation_provider()
+    from app.services.translation.nllb_service_provider import NLLBServiceProvider
+
+    assert isinstance(provider, NLLBServiceProvider)
+
+
+@pytest.mark.asyncio
+async def test_nllb_translates_without_google_key() -> None:
+    """NLLB translation works without Google key."""
+    from app.services.translation.nllb_service_provider import NLLBServiceProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"translated_text": "Hola mundo"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = NLLBServiceProvider(
+        settings=Settings(
+            nllb_service_url="http://nllb:8001",
+            cloud_translation_api_key=None,
+        ),
+        client=client,
+    )
+    result = await provider.translate(
+        segment_id="seg-1",
+        text="Hello world",
+        source_language="en",
+        target_language="es",
+        is_final=True,
+    )
+    assert result.translated_text == "Hola mundo"
+    assert result.provider == "nllb"
+    await provider.close()
+
+
+def test_cloud_provider_not_imported_when_nllb(monkeypatch) -> None:
+    """Cloud translation code should not be imported when NLLB is selected."""
+    import sys
+
+    settings = Settings(
+        translation_provider="nllb",
+        cloud_translation_api_key=None,
+    )
+    monkeypatch.setattr("app.services.translation.get_settings", lambda: settings)
+    # Ensure cloud_provider module is not already loaded from a prior test
+    sys.modules.pop("app.services.translation.cloud_provider", None)
+    sys.modules.pop("app.services.translation.hybrid_provider", None)
+
+    provider = create_translation_provider()
+    from app.services.translation.nllb_service_provider import NLLBServiceProvider
+
+    assert isinstance(provider, NLLBServiceProvider)
+    assert "app.services.translation.cloud_provider" not in sys.modules
+    assert "app.services.translation.hybrid_provider" not in sys.modules
+
+
+def test_missing_google_key_does_not_fail_startup_with_nllb() -> None:
+    """Startup should not fail or warn when Google key is missing but NLLB is configured."""
+    from app.services.translation import warn_on_translation_misconfiguration
+
+    settings = Settings(
+        translation_provider="nllb",
+        cloud_translation_api_key=None,
+        nllb_service_url="http://nllb:8001",
+    )
+    # Should not raise -- no warning for NLLB mode when NLLB is available.
+    warn_on_translation_misconfiguration(settings)

@@ -43,9 +43,9 @@ Selected by `TRANSLATION_PROVIDER` (`translation_provider` setting):
 
 | Mode | Behavior |
 |---|---|
-| `hybrid` (default) | cloud first, NLLB-200 fallback |
+| `nllb` (default) | NLLB-200 translation service |
+| `hybrid` | cloud first, NLLB-200 fallback |
 | `cloud` | cloud only; failures surface as `translation_failed` |
-| `nllb` | NLLB-200 only |
 
 The factory `create_translation_provider()` in
 `backend/app/services/translation/__init__.py` reads the setting and also

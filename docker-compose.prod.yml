@@ -1,7 +1,6 @@
 # Production Docker deployment.
 #
 #   docker compose -f docker-compose.prod.yml up -d --build
-#   docker compose -f docker-compose.prod.yml --profile nllb up -d --build   (with NLLB fallback)
 #
 # Differences from the dev stack:
 #   - backend is NOT published to the host (internal only; nginx is the single
@@ -40,12 +39,16 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: json
       PORT: "8000"
+      TRANSLATION_PROVIDER: ${TRANSLATION_PROVIDER:-nllb}
+      NLLB_SERVICE_URL: http://nllb:8001
+    depends_on:
+      nllb:
+        condition: service_healthy
     restart: unless-stopped
 
   nllb:
     build:
       context: ./nllb
-    profiles: ["nllb"]
     init: true
     volumes:
       - nllb-models:/models
@@ -54,6 +57,12 @@ services:
       NLLB_MODEL_NAME: ${NLLB_MODEL_NAME:-facebook/nllb-200-distilled-600M}
       NLLB_DEVICE: ${NLLB_DEVICE:-cpu}
       NLLB_WARM_START: "true"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
     restart: unless-stopped
 
 volumes:

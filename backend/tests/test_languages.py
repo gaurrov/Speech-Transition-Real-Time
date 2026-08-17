@@ -30,10 +30,18 @@ def test_nllb_flores_codes() -> None:
     assert nllb_code("en") == "eng_Latn"
     assert nllb_code("hi") == "hin_Deva"
     assert nllb_code("ta") == "tam_Taml"
+    assert nllb_code("te") == "tel_Telu"
+    assert nllb_code("ml") == "mal_Mlym"
+    assert nllb_code("kn") == "kan_Knda"
     assert nllb_code("es") == "spa_Latn"
     assert nllb_code("fr") == "fra_Latn"
+    assert nllb_code("de") == "deu_Latn"
+    assert nllb_code("pt") == "por_Latn"
     assert nllb_code("ja") == "jpn_Jpan"
+    assert nllb_code("ko") == "kor_Hang"
     assert nllb_code("zh") == "zho_Hans"
+    assert nllb_code("ar") == "arb_Arab"
+    assert nllb_code("ru") == "rus_Cyrl"
 
 
 def test_cloud_code_defaults_to_iso() -> None:

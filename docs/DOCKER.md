@@ -21,13 +21,12 @@ development.
 | ----------- | ---------------------- | ----------------------------------------------------------- |
 | `frontend`  | nginx:1.27-alpine      | Serves the built React app + reverse-proxies `/api`, `/health`, `/ws/` to the backend |
 | `backend`   | python:3.12-slim       | FastAPI: Deepgram streaming ASR, translation, LLM refinement, WebSocket pipeline |
-| `nllb`      | python:3.12-slim       | *Optional* internal NLLB-200 fallback translation service (never published) |
+| `nllb`      | python:3.12-slim       | NLLB-200 translation service (always starts, internal only, never published) |
 
 - The backend image runs as a **non-root** user and has a `HEALTHCHECK` against
   `/health`.
-- `nllb` runs under the Compose **profile** `nllb` — it is not started (or even
-  built) unless you opt in. The main backend reaches it over the private Docker
-  network at `http://nllb:8000`.
+- `nllb` always starts with the stack. The backend connects to it at
+  `http://nllb:8001` (set automatically by docker-compose via `NLLB_SERVICE_URL`).
 - In production only `frontend` publishes a port. The backend and nllb are
   reachable only inside the compose network.
 
@@ -46,7 +45,7 @@ Canonical names (all optional):
 | `ENABLE_LLM_REFINEMENT` | `true`/`false`; gate for the async refinement pass. |
 | `CORS_ALLOW_ORIGINS` | JSON list, e.g. `["https://app.example.com"]`. Default dev origins. Never set `"*"` with credentials. |
 | `WS_ALLOWED_ORIGINS` | Optional JSON list of allowed WebSocket `Origin`s. When set, `/ws/translate` rejects others with close code **1008**. Leave unset for Electron (`file://`) and mixed-origin use. |
-| `NLLB_SERVICE_URL` | `http://nllb:8000` when using the optional nllb service (see §5). |
+| `NLLB_SERVICE_URL` | Backend only. `http://nllb:8001` (set automatically by docker-compose). |
 | `NLLB_MODEL_NAME` | nllb container only. Default `facebook/nllb-200-distilled-600M`. |
 | `NLLB_DEVICE` | nllb container only. Default `cpu` (the image ships CPU torch only). |
 | `NLLB_WARM_START` | nllb container only. Default `true` (model loads in the background at boot). |
@@ -86,22 +85,15 @@ docker compose -f docker-compose.prod.yml up -d --build
 - Only port **80** is published. Terminate TLS in front of it (§10).
 - The backend forces `ENVIRONMENT=production`, `LOG_FORMAT=json`, and a
   `service_healthy` gating for nginx.
-- To enable the offline NLLB fallback, add `NLLB_SERVICE_URL=http://nllb:8000`
-  to `.env` and include the profile:
-
-```bash
-docker compose -f docker-compose.prod.yml --profile nllb up -d --build
-```
-
-First start downloads the NLLB weights (~2.5 GB) into the `nllb-models`
-volume; allow a few minutes before the model reports loaded.
+- NLLB-200 always starts with the stack (no profile needed). First start
+  downloads the weights (~2.5 GB) into the `nllb-models` volume; allow a few
+  minutes before the model reports loaded.
 
 ## 6. Building images
 
 ```bash
-docker compose build                 # frontend + backend
-docker compose --profile nllb build  # + the optional nllb image
-docker compose -f docker-compose.prod.yml --profile nllb build
+docker compose build                 # frontend + backend + nllb
+docker compose -f docker-compose.prod.yml build
 ```
 
 ## 7. Starting and stopping
@@ -161,13 +153,13 @@ For a separate API domain set `BACKEND_HOST=api.example.com` and
 
 | Symptom | Cause / fix |
 | --- | --- |
-| Backend healthy, but translation says `translation_misconfigured` | No `TRANSLATION_API_KEY` and no reachable fallback. Either set the key, or set `NLLB_SERVICE_URL=http://nllb:8000` **and** run with `--profile nllb`. |
+| Backend healthy, but translation says `translation_misconfigured` | No `DEEPGRAM_API_KEY` is set. Set it in `.env` and restart. NLLB requires no API key — it runs locally inside the `nllb` container. |
 | WebSocket closes immediately with **1008** | `WS_ALLOWED_ORIGINS` is set and the client's `Origin` is not listed. Add your origin, or clear the variable for Electron/`file://`. |
 | Browser shows a CORS error on `/health` or `/api` | `CORS_ALLOW_ORIGINS` must contain the exact origin (scheme+host+port) of the page. |
 | `Bind for 0.0.0.0:8000 failed: port is already allocated` | A local backend already owns 8000. Use `BACKEND_PORT=18000 docker compose up -d`. |
 | nginx returns 502 for `/ws/` | The backend is not healthy. Check `docker compose ps`; frontend `depends_on` backend `service_healthy`. |
 | WebSocket drops after ~60 s | That is the `/api`/`/health` read timeout — WebSockets use the `/ws/` location with 3600 s timeouts. Make sure the client connects to `.../ws/translate`, not `.../api/...`. |
-| `nllb_warm_up_failed` / permission error under `/models` | Stale root-owned cache volume. Recreate it: `docker compose --profile nllb down -v` then `up`. |
+| `nllb_warm_up_failed` / permission error under `/models` | Stale root-owned cache volume. Recreate it: `docker compose down -v` then `up`. |
 | First translation is very slow after deploy | The model (~2.5 GB) is downloading into `nllb-models`; wait for `model_loaded: true` in `/health` of the nllb container. |
 | Model download fails behind a corporate proxy | Set `HF_ENDPOINT` and proxy env vars on the nllb service, or pre-populate the `nllb-models` volume on a networked host. |
 | Container OOM-killed during NLLB inference | The 600M fp32 model needs ~3 GB RAM. Add memory limits or run nllb on a host with more RAM; the CPU-only image has no CUDA. |

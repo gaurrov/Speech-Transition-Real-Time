@@ -167,3 +167,213 @@ def test_factory_nllb_uses_service_when_configured(monkeypatch) -> None:
     monkeypatch.setattr("app.services.translation.get_settings", lambda: settings)
     provider = create_translation_provider()
     assert isinstance(provider, NLLBServiceProvider)
+
+
+# --- NLLB-4: language code mapping across all supported pairs ----------------
+
+
+@pytest.mark.asyncio
+async def test_translate_en_hi_sends_flores_codes() -> None:
+    """English -> Hindi: eng_Latn -> hin_Deva."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"translated_text": "Namaste"})
+
+    provider = _provider(httpx.MockTransport(handler))
+    result = await provider.translate(
+        segment_id="seg-1",
+        text="Hello",
+        source_language="en",
+        target_language="hi",
+        is_final=True,
+    )
+    assert '"source_lang":"eng_Latn"' in captured["body"]
+    assert '"target_lang":"hin_Deva"' in captured["body"]
+    assert result.translated_text == "Namaste"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_translate_hi_en_sends_flores_codes() -> None:
+    """Hindi -> English: hin_Deva -> eng_Latn."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"translated_text": "Hello"})
+
+    provider = _provider(httpx.MockTransport(handler))
+    result = await provider.translate(
+        segment_id="seg-2",
+        text="Namaste",
+        source_language="hi",
+        target_language="en",
+        is_final=True,
+    )
+    assert '"source_lang":"hin_Deva"' in captured["body"]
+    assert '"target_lang":"eng_Latn"' in captured["body"]
+    assert result.translated_text == "Hello"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_translate_en_ta_sends_flores_codes() -> None:
+    """English -> Tamil: eng_Latn -> tam_Taml."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"translated_text": "Vanakkam"})
+
+    provider = _provider(httpx.MockTransport(handler))
+    result = await provider.translate(
+        segment_id="seg-3",
+        text="Hello",
+        source_language="en",
+        target_language="ta",
+        is_final=True,
+    )
+    assert '"source_lang":"eng_Latn"' in captured["body"]
+    assert '"target_lang":"tam_Taml"' in captured["body"]
+    assert result.translated_text == "Vanakkam"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_translate_en_es_sends_flores_codes() -> None:
+    """English -> Spanish: eng_Latn -> spa_Latn."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"translated_text": "Hola"})
+
+    provider = _provider(httpx.MockTransport(handler))
+    result = await provider.translate(
+        segment_id="seg-4",
+        text="Hello",
+        source_language="en",
+        target_language="es",
+        is_final=True,
+    )
+    assert '"source_lang":"eng_Latn"' in captured["body"]
+    assert '"target_lang":"spa_Latn"' in captured["body"]
+    assert result.translated_text == "Hola"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_translate_en_fr_sends_flores_codes() -> None:
+    """English -> French: eng_Latn -> fra_Latn."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"translated_text": "Bonjour"})
+
+    provider = _provider(httpx.MockTransport(handler))
+    result = await provider.translate(
+        segment_id="seg-5",
+        text="Hello",
+        source_language="en",
+        target_language="fr",
+        is_final=True,
+    )
+    assert '"source_lang":"eng_Latn"' in captured["body"]
+    assert '"target_lang":"fra_Latn"' in captured["body"]
+    assert result.translated_text == "Bonjour"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_translate_en_de_sends_flores_codes() -> None:
+    """English -> German: eng_Latn -> deu_Latn."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"translated_text": "Hallo"})
+
+    provider = _provider(httpx.MockTransport(handler))
+    result = await provider.translate(
+        segment_id="seg-6",
+        text="Hello",
+        source_language="en",
+        target_language="de",
+        is_final=True,
+    )
+    assert '"source_lang":"eng_Latn"' in captured["body"]
+    assert '"target_lang":"deu_Latn"' in captured["body"]
+    assert result.translated_text == "Hallo"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_translate_en_ja_sends_flores_codes() -> None:
+    """English -> Japanese: eng_Latn -> jpn_Jpan."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"translated_text": "Konnichiwa"})
+
+    provider = _provider(httpx.MockTransport(handler))
+    result = await provider.translate(
+        segment_id="seg-7",
+        text="Hello",
+        source_language="en",
+        target_language="ja",
+        is_final=True,
+    )
+    assert '"source_lang":"eng_Latn"' in captured["body"]
+    assert '"target_lang":"jpn_Jpan"' in captured["body"]
+    assert result.translated_text == "Konnichiwa"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_translate_same_language_sends_identical_codes() -> None:
+    """source == target: service is called with the same code; text returned as-is."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"translated_text": "Hello world"})
+
+    provider = _provider(httpx.MockTransport(handler))
+    result = await provider.translate(
+        segment_id="seg-8",
+        text="Hello world",
+        source_language="en",
+        target_language="en",
+        is_final=True,
+    )
+    assert '"source_lang":"eng_Latn"' in captured["body"]
+    assert '"target_lang":"eng_Latn"' in captured["body"]
+    assert result.translated_text == "Hello world"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_translate_unsupported_language_returns_structured_error() -> None:
+    """Unsupported language returns TranslationError; never crashes the WS."""
+    sent = {"called": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent["called"] = True
+        return httpx.Response(200, json={"translated_text": "x"})
+
+    provider = _provider(httpx.MockTransport(handler))
+    with pytest.raises(TranslationError) as exc:
+        await provider.translate(
+            segment_id="seg-9",
+            text="Hello",
+            source_language="xx",
+            target_language="es",
+            is_final=True,
+        )
+    assert exc.value.code == "unsupported_language"
+    assert sent["called"] is False
+    await provider.close()

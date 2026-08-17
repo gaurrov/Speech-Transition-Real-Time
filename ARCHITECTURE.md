@@ -44,8 +44,8 @@
                           │ partial + final TranscriptSegment            │
                           ▼                                              │
               ┌─────────────────────┐                                   │
-              │  TranslationProvider  │  hybrid: cloud (default) ────────┘
-              │  cloud / NLLB          │  or NLLB-200 (fallback/offline)
+              │  TranslationProvider  │  nllb (default) ──────────────┘
+              │  cloud / hybrid        │  or cloud/hybrid (optional)
               └───────────┬───────────┘
                           │ partial + final TranslationSegment
                           ▼
@@ -127,7 +127,7 @@ Three implementations, selected by the `translation_provider` setting:
 - `NLLBTranslationProvider` — offline fallback using the NLLB-200
   distilled-600M model. Loads lazily in a thread on first use; raises
   `translation_failed`/`nllb_model_unavailable` if the runtime can't load it.
-- `HybridTranslationProvider` — default. Tries cloud first; on any
+- `HybridTranslationProvider` — optional. Tries cloud first; on any
   `TranslationError` it falls back to NLLB for that utterance. Both failing
   raises `TranslationError("translation_failed")`. A transient cloud failure
   therefore degrades one utterance instead of failing the meeting.
@@ -137,6 +137,11 @@ Language codes are resolved centrally in `languages.py` (each `Language`:
 pipeline never branches on language pairs. `create_translation_provider()` in
 `translation/__init__.py` is the only entry point the transport uses. See
 `docs/translation.md` for the full design.
+
+NLLB-200 runs as a dedicated container (`nllb`) on port 8001, always started
+with the stack. The backend connects to it via `NLLB_SERVICE_URL=http://nllb:8001`
+(set automatically by docker-compose). The NLLB container is not published to
+the host — it is only reachable from the backend inside the Docker network.
 
 ### `LLMProvider` (`backend/app/services/llm/base.py`)
 
@@ -359,8 +364,8 @@ different mechanism behind the same `AudioSource` interface.
 | Client capture → WS send | < 20 ms |
 | ASR partial result | < 300 ms |
 | Translation (cloud) | < 150 ms |
-| Translation (NLLB fallback) | 1–3 s, only on cloud failure |
-| Total: speech → on-screen translation | < 500 ms |
+| Translation (NLLB default) | 1–3 s first call, ~1.5 s steady-state |
+| Total: speech → on-screen translation | < 500 ms (cloud), 2–4 s (NLLB) |
 | LLM refinement (async, non-blocking) | 1–3 s, off critical path |
 
 These are targets to validate against. ASR latency is now actually measured

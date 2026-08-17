@@ -58,9 +58,10 @@ class Settings(BaseSettings):
     deepgram_audio_buffer_seconds: float = 2.0  # in-flight audio kept across reconnects
 
     # --- Translation ---
-    # "hybrid" (default) tries the low-latency cloud provider first and falls
-    # back to NLLB-200 offline; "cloud"/"nllb" pin a single path.
-    translation_provider: Literal["hybrid", "cloud", "nllb"] = "hybrid"
+    # "nllb" (default) uses the NLLB-200 translation service.
+    # "hybrid" tries the low-latency cloud provider first and falls
+    # back to NLLB-200; "cloud" pins the cloud provider alone.
+    translation_provider: Literal["hybrid", "cloud", "nllb"] = "nllb"
     # Accepts either TRANSLATION_API_KEY (preferred) or the older
     # CLOUD_TRANSLATION_API_KEY spelling.
     cloud_translation_api_key: str | None = Field(
@@ -80,10 +81,10 @@ class Settings(BaseSettings):
     nllb_device: Literal["cpu", "cuda"] = "cpu"
     nllb_max_length: int = 128
     nllb_num_beams: int = 4
-    # When set, the NLLB fallback is served by a separate, internal NLLB
-    # service over HTTP instead of loading torch in-process (keeps the main
-    # backend image small). The service is never exposed publicly.
-    nllb_service_url: str | None = None
+    # NLLB-200 is served by a separate, internal NLLB service over HTTP
+    # instead of loading torch in-process (keeps the main backend image small).
+    # The service is never exposed publicly.
+    nllb_service_url: str | None = "http://localhost:8001"
     nllb_service_timeout_sec: float = 30.0
 
     # --- LLM (async post-processing / refinement) ---
