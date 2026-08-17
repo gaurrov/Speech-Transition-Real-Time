@@ -1,4 +1,6 @@
 """Tests for cloud / NLLB / hybrid translation providers and the factory."""
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 
@@ -530,3 +532,120 @@ def test_missing_google_key_does_not_fail_startup_with_nllb() -> None:
     )
     # Should not raise -- no warning for NLLB mode when NLLB is available.
     warn_on_translation_misconfiguration(settings)
+
+
+# --- probe_nllb_service (async probe) --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_nllb_service_returns_true_when_reachable(monkeypatch) -> None:
+    """probe_nllb_service returns True when the NLLB service responds 200."""
+    import app.services.translation as trans_mod
+
+    monkeypatch.setattr(
+        "app.services.translation.get_settings",
+        lambda: Settings(nllb_service_url="http://nllb:8001"),
+    )
+    monkeypatch.setattr(trans_mod, "_nllb_service_reachable", None)
+    monkeypatch.setattr(trans_mod, "_nllb_probe_ts", 0.0)
+
+    async def _mock_health(self) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        "app.services.translation.nllb_service_provider.NLLBServiceProvider.health_check",
+        _mock_health,
+    )
+    monkeypatch.setattr(
+        "app.services.translation.nllb_service_provider.NLLBServiceProvider.close",
+        AsyncMock(),
+    )
+    from app.services.translation import probe_nllb_service
+
+    result = await probe_nllb_service()
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_probe_nllb_service_returns_false_when_unreachable(monkeypatch) -> None:
+    """probe_nllb_service returns False when the NLLB service is down."""
+    import app.services.translation as trans_mod
+
+    monkeypatch.setattr(
+        "app.services.translation.get_settings",
+        lambda: Settings(nllb_service_url="http://nllb:8001"),
+    )
+    monkeypatch.setattr(trans_mod, "_nllb_service_reachable", None)
+    monkeypatch.setattr(trans_mod, "_nllb_probe_ts", 0.0)
+
+    async def _mock_health(self) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        "app.services.translation.nllb_service_provider.NLLBServiceProvider.health_check",
+        _mock_health,
+    )
+    monkeypatch.setattr(
+        "app.services.translation.nllb_service_provider.NLLBServiceProvider.close",
+        AsyncMock(),
+    )
+    from app.services.translation import probe_nllb_service
+
+    result = await probe_nllb_service()
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_probe_nllb_service_uses_cache(monkeypatch) -> None:
+    """Second call within TTL returns cached result without probing again."""
+    import app.services.translation as trans_mod
+
+    monkeypatch.setattr(
+        "app.services.translation.get_settings",
+        lambda: Settings(nllb_service_url="http://nllb:8001"),
+    )
+    # Set cache to a known value within TTL
+    import time
+
+    monkeypatch.setattr(trans_mod, "_nllb_service_reachable", True)
+    monkeypatch.setattr(trans_mod, "_nllb_probe_ts", time.monotonic())
+    monkeypatch.setattr(trans_mod, "_NLLB_PROBE_TTL_SECONDS", 999.0)
+
+    call_count = {"n": 0}
+
+    async def _mock_health(self) -> bool:
+        call_count["n"] += 1
+        return False  # would return False if probed, but cache says True
+
+    monkeypatch.setattr(
+        "app.services.translation.nllb_service_provider.NLLBServiceProvider.health_check",
+        _mock_health,
+    )
+    monkeypatch.setattr(
+        "app.services.translation.nllb_service_provider.NLLBServiceProvider.close",
+        AsyncMock(),
+    )
+    from app.services.translation import probe_nllb_service
+
+    result = await probe_nllb_service()
+    assert result is True  # from cache, not from probe
+    assert call_count["n"] == 0  # health_check was never called
+
+
+@pytest.mark.asyncio
+async def test_probe_nllb_service_no_url_falls_to_offline(monkeypatch) -> None:
+    """When nllb_service_url is unset, probe falls back to offline runtime check."""
+    import app.services.translation as trans_mod
+
+    monkeypatch.setattr(
+        "app.services.translation.get_settings",
+        lambda: Settings(nllb_service_url=None),
+    )
+    monkeypatch.setattr(trans_mod, "_nllb_service_reachable", None)
+    monkeypatch.setattr(trans_mod, "_nllb_probe_ts", 0.0)
+    monkeypatch.setattr(trans_mod, "_offline_runtime_available", lambda: True)
+
+    from app.services.translation import probe_nllb_service
+
+    result = await probe_nllb_service()
+    assert result is True

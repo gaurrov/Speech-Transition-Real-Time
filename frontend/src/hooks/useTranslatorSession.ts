@@ -16,6 +16,7 @@ import type {
 
 export interface UseTranslatorSessionOptions {
   mode?: SessionMode
+  translationAvailable?: boolean | null
 }
 
 export interface TranslatorSession {
@@ -50,6 +51,7 @@ function createClient(
 
 export function useTranslatorSession({
   mode = "mock",
+  translationAvailable = null,
 }: UseTranslatorSessionOptions = {}): TranslatorSession {
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle")
   const [status, setStatus] = useState<SessionStatus>("idle")
@@ -66,6 +68,8 @@ export function useTranslatorSession({
   const sessionIdRef = useRef<string | null>(null)
   const modeRef = useRef(mode)
   modeRef.current = mode
+  const translationAvailableRef = useRef(translationAvailable)
+  translationAvailableRef.current = translationAvailable
 
   // Dev-only latency bookkeeping: final receipt time per segment (T4' client)
   // and the last audio chunk send time (T1) used for the network estimate.
@@ -210,12 +214,20 @@ export function useTranslatorSession({
           }
         }
         break
-      case "error":
+      case "error": {
         // A translation failure is non-fatal: the session keeps running.
-        if (event.code === "translation_failed") break
+        // Suppress the per-utterance error when the standing banner already
+        // explains why translation is unavailable.
+        if (
+          event.code === "translation_failed" &&
+          translationAvailableRef.current === false
+        ) {
+          break
+        }
         setError(event.message)
         setStatus("error")
         break
+      }
       case "session_stopped":
         break
     }

@@ -154,6 +154,35 @@ async def test_service_no_url_raises_config() -> None:
     assert provider._base_url == ""
 
 
+@pytest.mark.asyncio
+async def test_health_check_probes_service_success() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).endswith("/health")
+        assert request.method == "GET"
+        return httpx.Response(200, json={"status": "ok"})
+
+    provider = _provider(httpx.MockTransport(handler))
+    assert await provider.health_check() is True
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_health_check_probes_service_failure() -> None:
+    provider = _provider(httpx.MockTransport(lambda r: httpx.Response(500, text="down")))
+    assert await provider.health_check() is False
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_health_check_probes_service_unreachable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    provider = _provider(httpx.MockTransport(handler))
+    assert await provider.health_check() is False
+    await provider.close()
+
+
 def test_factory_hybrid_uses_service_when_configured(monkeypatch) -> None:
     settings = Settings(translation_provider="hybrid", nllb_service_url="http://nllb:8000")
     monkeypatch.setattr("app.services.translation.get_settings", lambda: settings)

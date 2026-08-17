@@ -3,6 +3,7 @@ import { CompactHeader } from "./components/CompactHeader"
 import { CompactPanel } from "./components/CompactPanel"
 import { DiagnosticsPanel } from "./components/DiagnosticsPanel"
 import { ErrorBanner } from "./components/ErrorBanner"
+import { TranslationWarning } from "./components/TranslationWarning"
 import { LanguageBar } from "./components/LanguageBar"
 import { LatencyIndicator } from "./components/LatencyIndicator"
 import { ListeningControls } from "./components/ListeningControls"
@@ -13,6 +14,7 @@ import { statusMeta } from "./components/status"
 import { LANGUAGES, SOURCE_LANGUAGES } from "./config/languages"
 import { loadPreferences, savePreferences } from "./config/preferences"
 import { useAudioCapture } from "./hooks/useAudioCapture"
+import { useBackendHealth } from "./hooks/useBackendHealth"
 import { useTranslatorSession } from "./hooks/useTranslatorSession"
 import { createAudioSource, type AudioSourceKind } from "./providers/audio/sources"
 import { DEFAULT_VAD_CONFIG } from "./providers/vad/types"
@@ -41,7 +43,8 @@ export default function App() {
     DEFAULT_VAD_CONFIG.speechProbThreshold,
   )
 
-  const session = useTranslatorSession({ mode })
+  const health = useBackendHealth()
+  const session = useTranslatorSession({ mode, translationAvailable: health.translationAvailable })
   const capture = useAudioCapture({
     onChunk: session.sendAudio,
     onVADEvent: session.sendVADEvent,
@@ -80,7 +83,13 @@ export default function App() {
     return unsubscribe
   }, [])
 
+  const translationWarning =
+    health.checked && health.translationAvailable === false
+      ? "Translation is currently unavailable — captions will still work, but nothing will be translated. This usually means the NLLB service isn't configured or reachable. See docs/translation.md."
+      : null
+
   const handleStart = useCallback(async () => {
+    health.recheck()
     const source = createAudioSource(audioSource)
     const ok = await capture.start(source)
     if (!ok) return
@@ -93,7 +102,7 @@ export default function App() {
       encoding: "linear16",
     })
     setIsRunning(true)
-  }, [capture, session, sourceLanguage, targetLanguage, audioSource])
+  }, [capture, session, sourceLanguage, targetLanguage, audioSource, health.recheck])
 
   const handleStop = useCallback(() => {
     session.stop()
@@ -157,6 +166,8 @@ export default function App() {
         onMinimize={() => window.desktop?.minimize()}
         onClose={() => window.desktop?.close()}
       />
+
+      <TranslationWarning message={translationWarning} />
 
       <ErrorBanner
         message={error}

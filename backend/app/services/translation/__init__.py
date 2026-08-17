@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import time
 
 import structlog
 
@@ -13,10 +14,16 @@ __all__ = [
     "TranslationError",
     "TranslationProvider",
     "create_translation_provider",
+    "is_translation_available",
     "warn_on_translation_misconfiguration",
 ]
 
 logger = structlog.get_logger(__name__)
+
+# Cache for NLLB service probe result to avoid hammering the service.
+_nllb_service_reachable: bool | None = None
+_nllb_probe_ts: float = 0.0
+_NLLB_PROBE_TTL_SECONDS: float = 30.0
 
 
 def _offline_runtime_available() -> bool:
@@ -32,7 +39,7 @@ def _offline_runtime_available() -> bool:
 
 
 def _nllb_fallback_available(settings: Settings) -> bool:
-    """True when the NLLB fallback path can actually serve translations.
+    """True when the NLLB fallback path can be used synchronously.
 
     In production the fallback is usually a separate NLLB service
     (``nllb_service_url``); on dev machines it can be the in-process model
@@ -52,6 +59,66 @@ def _make_nllb_provider(settings: Settings) -> TranslationProvider:
     from app.services.translation.nllb_provider import NLLBTranslationProvider
 
     return NLLBTranslationProvider(settings=settings)
+
+
+async def probe_nllb_service() -> bool:
+    """Async probe of the NLLB service. Result is cached for 30 seconds."""
+    global _nllb_service_reachable, _nllb_probe_ts
+
+    now = time.monotonic()
+    if (
+        _nllb_service_reachable is not None
+        and (now - _nllb_probe_ts) < _NLLB_PROBE_TTL_SECONDS
+    ):
+        return _nllb_service_reachable
+
+    settings = get_settings()
+    if not settings.nllb_service_url:
+        _nllb_service_reachable = _offline_runtime_available()
+        _nllb_probe_ts = now
+        return _nllb_service_reachable
+
+    from app.services.translation.nllb_service_provider import (
+        NLLBServiceProvider,
+    )
+
+    provider = NLLBServiceProvider(settings=settings)
+    try:
+        _nllb_service_reachable = await provider.health_check()
+    except Exception:
+        _nllb_service_reachable = False
+    finally:
+        _nllb_probe_ts = now
+        await provider.close()
+    return _nllb_service_reachable
+
+
+async def is_translation_available(settings: Settings) -> bool:
+    """Determine whether translations can actually be served right now.
+
+    Unlike config-presence checks, this probes live backends (NLLB service
+    health, cloud API key presence) to answer the real question: "will the
+    next translation attempt succeed?"
+    """
+    if settings.translation_provider in ("hybrid", "cloud"):
+        if settings.cloud_translation_api_key:
+            return True
+        if settings.translation_provider == "cloud":
+            return False
+
+    # nllb or hybrid fallback path
+    if settings.nllb_service_url:
+        from app.services.translation.nllb_service_provider import (
+            NLLBServiceProvider,
+        )
+
+        provider = NLLBServiceProvider(settings=settings)
+        try:
+            return await provider.health_check()
+        finally:
+            await provider.close()
+
+    return _offline_runtime_available()
 
 
 def warn_on_translation_misconfiguration(settings: Settings) -> None:

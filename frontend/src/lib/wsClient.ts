@@ -7,6 +7,7 @@ import type {
 import type { StreamingClient, StreamingClientHandlers } from "../providers/streaming/types"
 import type { VADEvent } from "../providers/vad/types"
 import "../types/runtimeConfig"
+import { resolveBackendBaseUrl } from "./backendUrl"
 
 const WS_PATH = "/ws/translate"
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -15,27 +16,20 @@ const RECONNECT_BASE_DELAY_MS = 500
 /**
  * Resolve the WebSocket endpoint at runtime.
  *
- * Precedence:
- *   1. window.TRANSLATOR_CONFIG (config.js, editable without a rebuild).
- *   2. Build-time VITE_BACKEND_HOST / VITE_BACKEND_USE_TLS.
- *   3. Same origin that served the page (the Docker nginx reverse proxy).
+ * Reuses the shared host-resolution helper from `backendUrl.ts`.
  */
 function wsUrl(): string {
-  const cfg = window.TRANSLATOR_CONFIG
-  const runtimeHost = cfg?.backendHost?.trim()
-  const runtimeTls = cfg?.useTls
-  const buildHost = (import.meta.env.VITE_BACKEND_HOST as string | undefined)?.trim()
-  const buildTls = import.meta.env.VITE_BACKEND_USE_TLS === "true"
+  const base = resolveBackendBaseUrl()
 
-  const host = runtimeHost || buildHost || ""
-  const useTls = runtimeTls ?? buildTls
-
-  if (!host && typeof location !== "undefined" && location.host) {
-    // Same-origin: the nginx proxy forwards /ws/* to FastAPI.
+  if (!base) {
+    const cfg = window.TRANSLATOR_CONFIG
+    const useTls = cfg?.useTls ?? import.meta.env.VITE_BACKEND_USE_TLS === "true"
     return `${useTls ? "wss" : "ws"}://${location.host}${WS_PATH}`
   }
-  const scheme = useTls ? "wss" : "ws"
-  return `${scheme}://${host}${WS_PATH}`
+
+  const wsScheme = base.startsWith("https") ? "wss" : "ws"
+  const host = base.replace(/^https?:\/\//, "")
+  return `${wsScheme}://${host}${WS_PATH}`
 }
 
 export class TranslatorClient implements StreamingClient {

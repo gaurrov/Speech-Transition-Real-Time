@@ -126,6 +126,11 @@ On the current Python 3.14 runtime the provider is exercised entirely through
 tests that monkeypatch `_load_model` / `_translate_engine`; a real model run
 requires the `offline` extra.
 
+If translation is unavailable, `/health`'s `translation.available` field will
+be `false` and the desktop/web UI will show a banner explaining this. Per-
+utterance `translation_failed` errors are suppressed while the banner is
+visible so the user is not spammed on every utterance.
+
 ## Transport integration
 
 `backend/app/websocket/translate_stream.py`:

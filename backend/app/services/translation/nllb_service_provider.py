@@ -117,8 +117,15 @@ class NLLBServiceProvider(TranslationProvider):
         )
 
     async def health_check(self) -> bool:
-        # Cheap check: the service is only usable when a URL is configured.
-        return bool(self._base_url)
+        if not self._base_url:
+            return False
+        try:
+            response = await self._client.get(
+                f"{self._base_url}/health", timeout=2.0
+            )
+            return response.status_code == 200
+        except httpx.HTTPError:
+            return False
 
     async def close(self) -> None:
         await self._client.aclose()
