@@ -5,6 +5,10 @@ import type { TranslationSegment } from "../../types"
 export interface TranslationViewProps {
   latest: TranslationSegment | null
   targetLanguage: string
+  /** True while the backend is processing a pending_translation event. */
+  translating?: boolean
+  /** Non-null when a translation error occurred (cleared on next pending). */
+  translationError?: string | null
   /** Larger, reading-first layout (used in compact mode and idle state). */
   prominent?: boolean
   /**
@@ -17,6 +21,8 @@ export interface TranslationViewProps {
 export function TranslationView({
   latest,
   targetLanguage,
+  translating = false,
+  translationError = null,
   prominent = false,
   history,
 }: TranslationViewProps) {
@@ -26,48 +32,63 @@ export function TranslationView({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [history])
 
-  if (!latest && (!history || history.length === 0)) {
+  const hasHistory = history && history.length > 0
+  const hasTranslation = latest != null
+
+  if (!hasTranslation && !hasHistory && !translating) {
     return (
       <p className="text-sm text-slate-400">The translation will appear here.</p>
     )
   }
 
-  const isPending = latest?.provider === "pending"
-
-  if (!history || history.length === 0) {
+  if (!hasHistory) {
     return (
       <div className="flex h-full flex-col justify-center gap-1.5">
-        {isPending ? (
+        {translating && !hasTranslation ? (
           <p
-            className={`font-medium leading-snug text-slate-900 ${
+            className={`font-medium leading-snug ${
               prominent ? "text-xl" : "text-base"
             } italic text-slate-500`}
           >
             <span className="animate-pulse">Translating…</span>
           </p>
-        ) : (
+        ) : hasTranslation ? (
           <p
             className={`font-medium leading-snug text-slate-900 ${
               prominent ? "text-xl" : "text-base"
-            } ${latest?.is_final ? "" : "italic text-slate-600"}`}
+            } ${latest!.is_final ? "" : "italic text-slate-600"}`}
           >
-            {latest?.translated_text}
+            {latest!.translated_text}
+          </p>
+        ) : null}
+        {translating && !hasTranslation ? (
+          <p className="text-[11px] text-slate-400">
+            Translating… · → {languageLabel(targetLanguage)}
+          </p>
+        ) : hasTranslation ? (
+          <p className="text-[11px] text-slate-400">
+            {latest!.is_final ? "Translated" : "Translating…"} · →{" "}
+            {languageLabel(targetLanguage)}
+          </p>
+        ) : null}
+        {translating && hasTranslation && (
+          <p className="text-[11px] italic text-slate-400">
+            <span className="animate-pulse">⟳</span> Translating next…
           </p>
         )}
-        <p className="text-[11px] text-slate-400">
-          {isPending
-            ? `Translating… · → ${languageLabel(targetLanguage)}`
-            : `${latest?.is_final ? "Translated" : "Translating…"} · → ${languageLabel(targetLanguage)}`}
-        </p>
+        {translationError && (
+          <p className="text-[11px] text-amber-600">
+            {translationError}
+          </p>
+        )}
       </div>
     )
   }
 
   return (
     <div ref={scrollRef} className="flex h-full max-h-full flex-col gap-2 overflow-y-auto">
-      {history.map((segment) => {
+      {history!.map((segment) => {
         const isLatest = segment.segment_id === latest?.segment_id
-        const segPending = segment.provider === "pending"
         return (
           <div
             key={segment.segment_id}
@@ -78,25 +99,32 @@ export function TranslationView({
             <p
               className={`font-medium leading-snug text-slate-900 ${
                 isLatest ? "" : "text-sm"
-              } ${segPending || !segment.is_final ? "italic text-slate-600" : ""}`}
+              } ${!segment.is_final ? "italic text-slate-600" : ""}`}
             >
-              {segPending ? (
-                <span className="animate-pulse">Translating…</span>
-              ) : (
-                segment.translated_text
-              )}
+              {segment.translated_text}
             </p>
             <p className="text-[11px] text-slate-400">{segment.source_text}</p>
             {isLatest && (
               <p className="text-[11px] text-slate-400">
-                {segPending
-                  ? `Translating… · → ${languageLabel(targetLanguage)}`
-                  : `${segment.is_final ? "Translated" : "Translating…"} · → ${languageLabel(targetLanguage)}`}
+                {segment.is_final ? "Translated" : "Translating…"} · →{" "}
+                {languageLabel(targetLanguage)}
               </p>
             )}
           </div>
         )
       })}
+      {translating && (
+        <div className="rounded-md px-2.5 py-1.5">
+          <p className="text-sm italic text-slate-500">
+            <span className="animate-pulse">Translating…</span>
+          </p>
+        </div>
+      )}
+      {translationError && (
+        <div className="rounded-md px-2.5 py-1.5">
+          <p className="text-[11px] text-amber-600">{translationError}</p>
+        </div>
+      )}
     </div>
   )
 }

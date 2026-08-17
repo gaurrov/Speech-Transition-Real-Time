@@ -35,6 +35,8 @@ class WSServerEventType(str, Enum):
     SPEECH_STARTED = "speech_started"
     SILENCE_DETECTED = "silence_detected"
     SPEECH_RESUMED = "speech_resumed"
+    PENDING_TRANSLATION = "pending_translation"
+    TRANSLATION_SKIPPED = "translation_skipped"
     TRANSLATION = "translation"
     REFINED_TRANSCRIPT = "refined_transcript"
     LATENCY = "latency"
@@ -138,6 +140,36 @@ class TranscriptEvent(BaseModel):
     start_ms: int | None = None
     end_ms: int | None = None
     confidence: float | None = None
+
+
+class PendingTranslationEvent(BaseModel):
+    """Sent immediately when a final transcript is queued for translation.
+
+    Tells the frontend that NLLB (or cloud) inference is about to start.
+    The segment_id links this to the matching final_transcript and the
+    subsequent translation event.
+    """
+
+    type: Literal["pending_translation"] = "pending_translation"
+    session_id: str
+    segment_id: str
+    source_text: str
+    source_language: str
+    target_language: str
+
+
+class TranslationSkippedEvent(BaseModel):
+    """Sent when a pending translation was dropped to keep the stream current.
+
+    The bounded translation queue drops the oldest pending item when full.
+    This event informs the frontend so it can optionally show a subtle
+    indicator.  The segment_id is the one that was skipped (never translated).
+    """
+
+    type: Literal["translation_skipped"] = "translation_skipped"
+    session_id: str
+    segment_id: str
+    reason: str = "stale"
 
 
 class TranslationEvent(BaseModel):
@@ -268,6 +300,8 @@ ServerEvent = (
     SessionStartedEvent
     | SpeechEvent
     | TranscriptEvent
+    | PendingTranslationEvent
+    | TranslationSkippedEvent
     | TranslationEvent
     | RefinedTranscriptEvent
     | LatencyEvent

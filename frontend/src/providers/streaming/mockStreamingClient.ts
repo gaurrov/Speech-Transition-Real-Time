@@ -69,6 +69,14 @@ export class MockStreamingClient implements StreamingClient {
           confidence: 1,
         })
         this.handlers.onEvent({
+          type: "pending_translation",
+          session_id: sessionId,
+          segment_id: segmentId,
+          source_text: source,
+          source_language: this.configuration.source_language,
+          target_language: this.configuration.target_language,
+        })
+        this.handlers.onEvent({
           type: "translation",
           session_id: sessionId,
           segment_id: segmentId,

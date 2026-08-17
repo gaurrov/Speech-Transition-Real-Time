@@ -18,7 +18,6 @@ import structlog
 from app.config import Settings, get_settings
 from app.models.schemas import TranslationSegment
 from app.services.translation.base import TranslationError, TranslationProvider
-from app.services.translation.cloud_provider import CloudTranslationProvider
 from app.services.translation.nllb_provider import NLLBTranslationProvider
 
 logger = structlog.get_logger(__name__)
@@ -34,7 +33,7 @@ class HybridTranslationProvider(TranslationProvider):
         nllb: TranslationProvider | None = None,
     ) -> None:
         self._settings = settings or get_settings()
-        self._cloud = cloud or CloudTranslationProvider(self._settings)
+        self._cloud = cloud
         self._nllb = nllb or NLLBTranslationProvider(self._settings)
 
     async def translate(
@@ -50,7 +49,7 @@ class HybridTranslationProvider(TranslationProvider):
         # provider entirely instead of raising + catching TranslationError on
         # every single utterance.  This avoids per-utterance log spam and makes
         # the fallback path explicit.
-        cloud_configured = bool(self._settings.cloud_translation_api_key)
+        cloud_configured = bool(self._settings.cloud_translation_api_key) and self._cloud is not None
         if cloud_configured:
             try:
                 return await self._cloud.translate(
@@ -96,8 +95,11 @@ class HybridTranslationProvider(TranslationProvider):
         return
 
     async def health_check(self) -> bool:
+        if self._cloud is None:
+            return False
         return await self._cloud.health_check()
 
     async def close(self) -> None:
-        await self._cloud.close()
+        if self._cloud is not None:
+            await self._cloud.close()
         await self._nllb.close()

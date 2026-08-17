@@ -208,6 +208,8 @@ export default function App() {
               <TranslationView
                 latest={session.latestTranslation}
                 targetLanguage={targetLanguage}
+                translating={session.status === "translating"}
+                translationError={session.translationError}
                 history={session.translationSegments}
               />
             </CompactPanel>
@@ -218,6 +220,8 @@ export default function App() {
           <TranslationView
             latest={session.latestTranslation}
             targetLanguage={targetLanguage}
+            translating={session.status === "translating"}
+            translationError={session.translationError}
             prominent
           />
         </div>

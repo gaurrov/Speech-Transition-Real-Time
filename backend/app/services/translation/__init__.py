@@ -183,12 +183,17 @@ def create_translation_provider() -> TranslationProvider:
     apply_extra_languages(settings.translation_extra_languages)
 
     if settings.translation_provider == "hybrid":
-        from app.services.translation.cloud_provider import CloudTranslationProvider
         from app.services.translation.hybrid_provider import HybridTranslationProvider
+
+        cloud = None
+        if settings.cloud_translation_api_key:
+            from app.services.translation.cloud_provider import CloudTranslationProvider
+
+            cloud = CloudTranslationProvider(settings=settings)
 
         return HybridTranslationProvider(
             settings=settings,
-            cloud=CloudTranslationProvider(settings=settings),
+            cloud=cloud,
             nllb=_make_nllb_provider(settings),
         )
     if settings.translation_provider == "cloud":

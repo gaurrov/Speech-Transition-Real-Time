@@ -421,6 +421,86 @@ async def test_hybrid_warm_up_noop_and_close() -> None:
     assert nllb.closed is True
 
 
+# --- Cloud: no API key → zero network requests, instant return ---------------
+
+
+@pytest.mark.asyncio
+async def test_hybrid_no_api_key_skips_cloud_entirely() -> None:
+    """When TRANSLATION_API_KEY is absent, cloud provider is never called."""
+    nllb = _FakeProvider("nllb", _segment(provider="nllb"))
+    settings = Settings(cloud_translation_api_key=None)
+    hybrid = HybridTranslationProvider(settings=settings, cloud=None, nllb=nllb)
+
+    result = await hybrid.translate(
+        segment_id="seg-1",
+        text="Hello",
+        source_language="en",
+        target_language="es",
+        is_final=True,
+    )
+    assert result.provider == "nllb"
+    assert nllb.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cloud_no_key_returns_instantly_no_network() -> None:
+    """Cloud provider with no API key raises cloud_config without any HTTP request."""
+    recorder = _Recorder(lambda _: (_ for _ in ()).throw(AssertionError("must not send")))
+    provider = _cloud_provider(recorder, cloud_translation_api_key=None)
+
+    import time
+
+    t0 = time.monotonic()
+    with pytest.raises(TranslationError) as exc:
+        await provider.translate(
+            segment_id="seg-1",
+            text="Hello",
+            source_language="en",
+            target_language="es",
+            is_final=True,
+        )
+    elapsed_ms = (time.monotonic() - t0) * 1000
+
+    assert exc.value.code == "cloud_config"
+    assert recorder.requests == []
+    assert elapsed_ms < 50, f"expected instant return, took {elapsed_ms:.1f} ms"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_factory_hybrid_skips_cloud_provider_without_key() -> None:
+    """Factory in hybrid mode does not instantiate CloudTranslationProvider when key is absent."""
+    from unittest.mock import patch
+
+    settings = Settings(translation_provider="hybrid", cloud_translation_api_key=None)
+    mock_settings = lambda: settings  # noqa: E731
+    with patch("app.services.translation.get_settings", mock_settings):
+        provider = create_translation_provider()
+
+    assert isinstance(provider, HybridTranslationProvider)
+    assert provider._cloud is None
+    assert provider._nllb is not None
+
+
+@pytest.mark.asyncio
+async def test_factory_hybrid_creates_cloud_provider_with_key() -> None:
+    """Factory in hybrid mode instantiates CloudTranslationProvider when key is present."""
+    from unittest.mock import patch
+
+    settings = Settings(
+        translation_provider="hybrid",
+        cloud_translation_api_key="test-key",
+    )
+    mock_settings = lambda: settings  # noqa: E731
+    with patch("app.services.translation.get_settings", mock_settings):
+        provider = create_translation_provider()
+
+    assert isinstance(provider, HybridTranslationProvider)
+    assert isinstance(provider._cloud, CloudTranslationProvider)
+    assert provider._nllb is not None
+    await provider.close()
+
+
 # --- Factory -----------------------------------------------------------------
 
 

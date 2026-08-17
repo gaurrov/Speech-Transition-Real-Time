@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     nllb_service_url: str | None = None
     nllb_service_timeout_sec: float = 30.0
 
+    # Per-segment translation timeout in the WebSocket translation worker.
+    # Covers the full round-trip: provider translate() including any
+    # queuing/lock time in the NLLB sidecar.  Set higher than
+    # nllb_service_timeout_sec to allow the sidecar timeout to fire first
+    # (sidecar returns 504 → backend nllb_service_connection → translation_failed).
+    translation_timeout_sec: float = 60.0
+
     # --- LLM (async post-processing / refinement) ---
     # Accepts either ENABLE_LLM_REFINEMENT (preferred) or the older
     # LLM_REFINEMENT_ENABLED spelling.

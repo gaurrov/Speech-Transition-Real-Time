@@ -233,13 +233,15 @@ def test_partial_and_final_transcripts_are_forwarded(
         assert latency["asr_final_ms"] == 180.0
 
         translation = ws.receive_json()
+        # The pending_translation event is sent immediately when the transcript
+        # is finalized, before NLLB inference starts.
+        assert translation["type"] == "pending_translation"
+        assert translation["segment_id"] == "seg-0"
+        assert translation["source_text"] == "We need to discuss the project."
+
+        translation = ws.receive_json()
         assert translation["type"] == "translation"
         assert translation["segment_id"] == "seg-0"
-        # Skip the pending placeholder sent when the transcript was finalized.
-        if translation["provider"] == "pending":
-            translation = ws.receive_json()
-            assert translation["type"] == "translation"
-            assert translation["segment_id"] == "seg-0"
         assert translation["source_text"] == "We need to discuss the project."
         assert translation["translated_text"] == "[We need to discuss the project.]"
         assert translation["source_language"] == "en"
@@ -431,6 +433,46 @@ def test_finalized_utterances_translate_in_order(
 
         _stop_and_await(ws, session_id)
         assert translator.closed is True
+
+
+def test_translation_queue_drops_stale_items(
+    fake_asr_factory, slow_translation_factory
+) -> None:
+    """When translations are slower than the utterance rate, stale items are
+    dropped from the bounded queue and only the most recent is translated."""
+    session_id = "tr-drop"
+    with TestClient(app).websocket_connect("/ws/translate") as ws:
+        _configure(ws, session_id)
+        provider = fake_asr_factory[-1]
+
+        provider.script(
+            [
+                TranscriptSegment(segment_id=f"seg-{i}", text=f"Sentence {i}.", is_final=True)
+                for i in range(5)
+            ]
+        )
+
+        translations: list[dict] = []
+        skipped: list[dict] = []
+        for _ in range(50):
+            event = ws.receive_json()
+            if event["type"] == "translation":
+                translations.append(event)
+            elif event["type"] == "translation_skipped":
+                skipped.append(event)
+            elif event["type"] == "session_stopped":
+                break
+            # Stop once we have enough evidence.
+            if len(translations) >= 2 and len(skipped) >= 1:
+                _stop_and_await(ws, session_id)
+                break
+
+        assert len(skipped) >= 1, f"Expected skipped events, got {skipped}"
+        skipped_ids = [s["segment_id"] for s in skipped]
+        assert all(sID.startswith("seg-") for sID in skipped_ids)
+
+        # The last translation received must be for seg-4 (the most recent).
+        assert translations[-1]["segment_id"] == "seg-4"
 
 
 def test_translation_uses_session_languages(

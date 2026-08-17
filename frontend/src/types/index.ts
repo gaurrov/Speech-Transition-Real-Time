@@ -116,6 +116,15 @@ export type ServerEvent =
       audio_seconds: number
     }
   | ({ type: "partial_transcript" | "final_transcript"; session_id: string } & TranscriptSegment)
+  | {
+      type: "pending_translation"
+      session_id: string
+      segment_id: string
+      source_text: string
+      source_language: string
+      target_language: string
+    }
+  | { type: "translation_skipped"; session_id: string; segment_id: string; reason?: string }
   | ({ type: "translation"; session_id: string } & TranslationSegment)
   | ({ type: "refined_transcript"; session_id: string } & RefinementResult)
   | ({ type: "latency"; session_id: string } & LatencyReport)

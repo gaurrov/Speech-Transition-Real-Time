@@ -18,9 +18,11 @@ from app.main import app  # noqa: I001
 # ---------------------------------------------------------------------------
 
 
-def _mock_translate(text: str, source_lang: str, target_lang: str) -> str:
+def _mock_translate(text: str, source_lang: str, target_lang: str, request_id: str, queue_enter_ts: float) -> tuple:
     """Fake translation that returns a plausible result."""
-    return f"[{target_lang}] {text}"
+    import time
+    result = "[" + target_lang + "] " + text
+    return (result, {"inference_start": time.monotonic(), "inference_end": time.monotonic()})
 
 
 @pytest.fixture(autouse=True)
@@ -149,7 +151,7 @@ class TestTranslateEndpoint:
     async def test_translate_exception_returns_500(self) -> None:
         from app import main
 
-        def explode(text, src, tgt):
+        def explode(text, src, tgt, request_id, queue_enter_ts):
             raise RuntimeError("model crashed")
 
         with patch.object(main, "_translate_sync", side_effect=explode):
@@ -220,7 +222,7 @@ class TestConfiguration:
         with patch.dict("os.environ", {}, clear=False):
             os_clean = {k: v for k, v in __import__("os").environ.items() if k != "NLLB_MAX_LENGTH"}
             with patch.dict(__import__("os").environ, os_clean, clear=True):
-                assert main._max_length() == 128
+                assert main._max_length() == 80
 
     def test_num_beams_default(self) -> None:
         from app import main
@@ -228,4 +230,38 @@ class TestConfiguration:
         with patch.dict("os.environ", {}, clear=False):
             os_clean = {k: v for k, v in __import__("os").environ.items() if k != "NLLB_NUM_BEAMS"}
             with patch.dict(__import__("os").environ, os_clean, clear=True):
-                assert main._num_beams() == 4
+                assert main._num_beams() == 1
+
+    def test_num_beams_custom(self) -> None:
+        from app import main
+
+        with patch.dict("os.environ", {"NLLB_NUM_BEAMS": "4"}):
+            assert main._num_beams() == 4
+
+    def test_num_threads_default(self) -> None:
+        from app import main
+
+        with patch.dict("os.environ", {}, clear=False):
+            os_clean = {k: v for k, v in __import__("os").environ.items() if k != "NLLB_NUM_THREADS"}
+            with patch.dict(__import__("os").environ, os_clean, clear=True):
+                assert main._num_threads() is None
+
+    def test_num_threads_custom(self) -> None:
+        from app import main
+
+        with patch.dict("os.environ", {"NLLB_NUM_THREADS": "4"}):
+            assert main._num_threads() == 4
+
+    def test_length_penalty_default(self) -> None:
+        from app import main
+
+        with patch.dict("os.environ", {}, clear=False):
+            os_clean = {k: v for k, v in __import__("os").environ.items() if k != "NLLB_LENGTH_PENALTY"}
+            with patch.dict(__import__("os").environ, os_clean, clear=True):
+                assert main._length_penalty() == 1.0
+
+    def test_length_penalty_custom(self) -> None:
+        from app import main
+
+        with patch.dict("os.environ", {"NLLB_LENGTH_PENALTY": "0.8"}):
+            assert main._length_penalty() == 0.8

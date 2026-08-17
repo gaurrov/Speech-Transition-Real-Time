@@ -21,6 +21,9 @@ sidecar container.
 """
 from __future__ import annotations
 
+import time
+import uuid
+
 import httpx
 import structlog
 
@@ -41,9 +44,16 @@ class NLLBServiceProvider(TranslationProvider):
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._settings = settings or get_settings()
-        self._client = client or httpx.AsyncClient(
-            timeout=self._settings.nllb_service_timeout_sec
+        # Break the single timeout into connect + read so a slow NLLB sidecar
+        # doesn't hold the backend event loop forever while still allowing
+        # legitimate CPU inference to finish.
+        timeout_obj = httpx.Timeout(
+            connect=5.0,
+            read=self._settings.nllb_service_timeout_sec,
+            write=5.0,
+            pool=5.0,
         )
+        self._client = client or httpx.AsyncClient(timeout=timeout_obj)
         self._base_url = (self._settings.nllb_service_url or "").rstrip("/")
 
     async def translate(
@@ -86,18 +96,44 @@ class NLLBServiceProvider(TranslationProvider):
             "source_lang": nllb_code(source_language),
             "target_lang": nllb_code(target_language),
         }
+        request_id = uuid.uuid4().hex[:12]
+        logger.info(
+            "nllb_request_start",
+            request_id=request_id,
+            segment_id=segment_id,
+            text_len=len(text),
+            src=source_language,
+            tgt=target_language,
+        )
+        request_started = time.monotonic()
         try:
             response = await self._client.post(
                 f"{self._base_url}/translate", json=payload
             )
         except httpx.HTTPError as exc:
+            elapsed_ms = round((time.monotonic() - request_started) * 1000, 1)
+            logger.warning(
+                "nllb_request_failed",
+                request_id=request_id,
+                segment_id=segment_id,
+                error=str(exc),
+                elapsed_ms=elapsed_ms,
+            )
             raise TranslationError(
                 "nllb_service_connection",
                 f"NLLB service unreachable: {exc}",
             ) from exc
 
+        elapsed_ms = round((time.monotonic() - request_started) * 1000, 1)
         if response.status_code >= 400:
             detail = response.text[:200]
+            logger.warning(
+                "nllb_request_error",
+                request_id=request_id,
+                segment_id=segment_id,
+                status_code=response.status_code,
+                elapsed_ms=elapsed_ms,
+            )
             raise TranslationError(
                 "nllb_service_error",
                 f"NLLB service error (HTTP {response.status_code}): {detail}",
@@ -107,10 +143,25 @@ class NLLBServiceProvider(TranslationProvider):
             body = response.json()
             translated = body["translated_text"]
         except (KeyError, ValueError) as exc:
+            logger.warning(
+                "nllb_request_malformed",
+                request_id=request_id,
+                segment_id=segment_id,
+                elapsed_ms=elapsed_ms,
+            )
             raise TranslationError(
                 "nllb_service_error",
                 "NLLB service returned an unexpected response",
             ) from exc
+
+        logger.info(
+            "nllb_response_received",
+            request_id=request_id,
+            segment_id=segment_id,
+            text_len=len(text),
+            translated_len=len(translated),
+            elapsed_ms=elapsed_ms,
+        )
 
         return TranslationSegment(
             segment_id=segment_id,

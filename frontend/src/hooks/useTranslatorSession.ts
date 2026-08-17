@@ -32,6 +32,8 @@ export interface TranslatorSession {
   latencyHistory: LatencyReport[]
   bytesReceived: number
   error: string | null
+  /** Set when a per-utterance translation fails; cleared on next pending. */
+  translationError: string | null
   start: (session: SessionConfiguration) => void
   sendAudio: (bytes: Uint8Array) => void
   sendVADEvent: (event: VADEvent) => void
@@ -64,6 +66,7 @@ export function useTranslatorSession({
   const [latencyHistory, setLatencyHistory] = useState<LatencyReport[]>([])
   const [bytesReceived, setBytesReceived] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [translationError, setTranslationError] = useState<string | null>(null)
   const clientRef = useRef<StreamingClient | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const modeRef = useRef(mode)
@@ -76,6 +79,11 @@ export function useTranslatorSession({
   const finalReceivedAtRef = useRef(new Map<string, number>())
   const lastAudioSentAtRef = useRef<number>(0)
   const latestLatencyRef = useRef<LatencyReport | null>(null)
+  // Tracks which segment_id is currently awaiting translation.  Used to
+  // prevent an older translation from clobbering a newer pending segment's
+  // state and to clear the "translating" status only when the right segment
+  // arrives.
+  const pendingSegmentIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     sessionIdRef.current = sessionId
@@ -140,6 +148,21 @@ export function useTranslatorSession({
         setStatus("listening")
         break
       }
+      case "pending_translation": {
+        pendingSegmentIdRef.current = event.segment_id
+        setTranslationError(null)
+        setStatus("translating")
+        break
+      }
+      case "translation_skipped": {
+        // A stale translation was dropped.  If it was the one we were waiting
+        // for, clear the pending state so the UI doesn't stay stuck.
+        if (pendingSegmentIdRef.current === event.segment_id) {
+          pendingSegmentIdRef.current = null
+          setStatus("listening")
+        }
+        break
+      }
       case "translation": {
         const segment: TranslationSegment = {
           segment_id: event.segment_id,
@@ -151,17 +174,20 @@ export function useTranslatorSession({
           provider: event.provider,
         }
         setLatestTranslation(segment)
-        if (event.provider === "pending") {
-          setStatus("translating")
-          break
-        }
         if (event.is_final) {
           setTranslationSegments((prev) => [
             ...prev.filter((existing) => existing.segment_id !== event.segment_id),
             segment,
           ])
         }
-        setStatus("listening")
+        // Only clear the "translating" status if this translation matches
+        // the segment we're currently waiting for.  An older segment's
+        // translation arriving after a newer pending_translation must not
+        // flip the status back to "listening".
+        if (pendingSegmentIdRef.current === event.segment_id) {
+          pendingSegmentIdRef.current = null
+          setStatus("listening")
+        }
         break
       }
       case "refined_transcript":
@@ -219,13 +245,17 @@ export function useTranslatorSession({
         }
         break
       case "error": {
-        // A translation failure is non-fatal: the session keeps running.
-        // Suppress the per-utterance error when the standing banner already
-        // explains why translation is unavailable.
-        if (
-          event.code === "translation_failed" &&
-          translationAvailableRef.current === false
-        ) {
+        // Translation failures are non-fatal: the session keeps running.
+        const isTranslationError =
+          event.code === "translation_failed" || event.code === "translation_timeout"
+        if (isTranslationError) {
+          pendingSegmentIdRef.current = null
+          setTranslationError(
+            event.code === "translation_timeout"
+              ? "Translation timed out"
+              : "Translation failed",
+          )
+          setStatus("listening")
           break
         }
         setError(event.message)
@@ -240,6 +270,7 @@ export function useTranslatorSession({
   const start = useCallback(
     (session: SessionConfiguration) => {
       setError(null)
+      setTranslationError(null)
       setTranscriptSegments([])
       setTranslationSegments([])
       setPartialText("")
@@ -252,6 +283,7 @@ export function useTranslatorSession({
       finalReceivedAtRef.current.clear()
       lastAudioSentAtRef.current = 0
       latestLatencyRef.current = null
+      pendingSegmentIdRef.current = null
 
       clientRef.current?.close()
       const client = createClient(modeRef.current, {
@@ -340,6 +372,7 @@ export function useTranslatorSession({
     latencyHistory,
     bytesReceived,
     error,
+    translationError,
     start,
     sendAudio,
     sendVADEvent,

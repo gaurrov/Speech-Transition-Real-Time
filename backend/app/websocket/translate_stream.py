@@ -109,6 +109,8 @@ class Session:
         self.translation_queue: (
             asyncio.Queue[tuple[str, str, float | None]] | None
         ) = None
+        # Tracks how many stale translations were dropped to keep the stream current.
+        self.translation_dropped_count = 0
         self.translation_task: asyncio.Task[None] | None = None
         # Async LLM refinement: a separate, non-blocking worker that corrects
         # finalized segments after the live caption/translation already
@@ -140,7 +142,14 @@ class Session:
             self._run_asr(), name=f"asr-{self.session_id}"
         )
         self.translator = create_translation_provider()
-        self.translation_queue = asyncio.Queue()
+        # Bounded queue: at most 1 pending translation beyond the one in-flight.
+        # When the queue is full, the oldest pending item is dropped to keep
+        # translations current.  For a real-time meeting translator, recency
+        # matters more than processing every utterance.
+        self.translation_queue: asyncio.Queue[
+            tuple[str, str, float | None]
+        ] = asyncio.Queue(maxsize=2)
+        self.translation_dropped_count = 0
         self.translation_task = asyncio.create_task(
             self._run_translation(), name=f"translation-{self.session_id}"
         )
@@ -302,6 +311,29 @@ class Session:
                 # The ASR final latency is threaded through so the translation
                 # latency report can carry a true server-side end-to-end figure.
                 if segment.is_final and self.translation_queue is not None:
+                    # Drop the oldest pending translation when the queue is full
+                    # to keep the stream current.  A stale translation is worse
+                    # than no translation for a real-time meeting translator.
+                    if self.translation_queue.full():
+                        try:
+                            dropped_id, _, _ = self.translation_queue.get_nowait()
+                            self.translation_dropped_count += 1
+                            logger.info(
+                                "translation_dropped_stale",
+                                session_id=self.session_id,
+                                dropped_segment_id=dropped_id,
+                                new_segment_id=segment.segment_id,
+                                total_dropped=self.translation_dropped_count,
+                            )
+                            await self.send_event(
+                                schemas.TranslationSkippedEvent(
+                                    session_id=self.session_id,
+                                    segment_id=dropped_id,
+                                    reason="stale",
+                                )
+                            )
+                        except asyncio.QueueEmpty:
+                            pass
                     logger.info(
                         "translation_enqueued",
                         session_id=self.session_id,
@@ -309,6 +341,7 @@ class Session:
                         text_len=len(segment.text),
                         source_language=config.source_language,
                         target_language=config.target_language,
+                        queue_size=self.translation_queue.qsize(),
                     )
                     self.translation_queue.put_nowait(
                         (
@@ -318,15 +351,12 @@ class Session:
                         )
                     )
                     await self.send_event(
-                        schemas.TranslationEvent(
+                        schemas.PendingTranslationEvent(
                             session_id=self.session_id,
                             segment_id=segment.segment_id,
                             source_text=segment.text,
-                            translated_text="",
                             source_language=config.source_language,
                             target_language=config.target_language,
-                            is_final=False,
-                            provider="pending",
                         )
                     )
 
@@ -364,11 +394,15 @@ class Session:
                     logger.debug("asr_close_failed", session_id=self.session_id)
 
     async def _run_translation(self) -> None:
-        """Translate finalized utterances in order and stream results to the client.
+        """Translate finalized utterances and stream results to the client.
 
         A single queue + worker per session keeps translation results in
-        utterance order. A translation failure is non-fatal: the error is
-        reported but the session (and all later utterances) keep going.
+        utterance order.  When the translation pipeline falls behind (e.g.
+        NLLB CPU inference takes longer than the inter-utterance gap), stale
+        items are skipped: after each translation the worker drains the queue
+        to the most recent pending item.  A translation failure is non-fatal:
+        the error is reported but the session (and all later utterances) keep
+        going.
         """
         config = self.config
         translator = self.translator
@@ -377,6 +411,23 @@ class Session:
             return
         while True:
             segment_id, text, asr_final_ms = await queue.get()
+            # Drain to the most recent pending item so stale translations are
+            # skipped.  The frontend's pendingSegmentIdRef already handles
+            # superseded pending_translation events correctly.
+            skipped = 0
+            while not queue.empty():
+                try:
+                    segment_id, text, asr_final_ms = queue.get_nowait()
+                    skipped += 1
+                except asyncio.QueueEmpty:
+                    break
+            if skipped:
+                logger.info(
+                    "translation_drained_stale",
+                    session_id=self.session_id,
+                    skipped_count=skipped,
+                    current_segment_id=segment_id,
+                )
             logger.info(
                 "translation_dequeued",
                 session_id=self.session_id,
@@ -395,15 +446,35 @@ class Session:
                 else config.source_language
             )
             try:
-                result = await translator.translate(
-                    segment_id=segment_id,
-                    text=text,
-                    source_language=source_language,
-                    target_language=config.target_language,
-                    is_final=True,
+                result = await asyncio.wait_for(
+                    translator.translate(
+                        segment_id=segment_id,
+                        text=text,
+                        source_language=source_language,
+                        target_language=config.target_language,
+                        is_final=True,
+                    ),
+                    timeout=self.settings.translation_timeout_sec,
                 )
             except asyncio.CancelledError:
                 raise
+            except asyncio.TimeoutError:
+                elapsed_ms = round((time.monotonic() - started) * 1000, 1)
+                logger.warning(
+                    "translation_timeout",
+                    session_id=self.session_id,
+                    segment_id=segment_id,
+                    elapsed_ms=elapsed_ms,
+                    timeout_sec=self.settings.translation_timeout_sec,
+                )
+                await self.send_event(
+                    schemas.ErrorMessage(
+                        session_id=self.session_id,
+                        code="translation_timeout",
+                        message=f"Translation timed out after {self.settings.translation_timeout_sec}s",
+                    )
+                )
+                continue
             except TranslationError as exc:
                 elapsed_ms = round((time.monotonic() - started) * 1000, 1)
                 logger.warning(

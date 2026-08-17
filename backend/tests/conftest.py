@@ -124,6 +124,66 @@ class FakeTranslationProvider(TranslationProvider):
         self.closed = True
 
 
+class SlowFakeTranslationProvider(TranslationProvider):
+    """In-memory translation provider with configurable delay per call."""
+
+    name = "slow_fake"
+
+    def __init__(self, delay_sec: float = 0.1) -> None:
+        self.calls: list[dict] = []
+        self.delay_sec = delay_sec
+        self.closed = False
+
+    async def translate(
+        self,
+        *,
+        segment_id: str,
+        text: str,
+        source_language: str,
+        target_language: str,
+        is_final: bool,
+    ) -> TranslationSegment:
+        import asyncio
+        await asyncio.sleep(self.delay_sec)
+        self.calls.append(
+            {
+                "segment_id": segment_id,
+                "text": text,
+                "source_language": source_language,
+                "target_language": target_language,
+                "is_final": is_final,
+            }
+        )
+        return TranslationSegment(
+            segment_id=segment_id,
+            source_text=text,
+            translated_text=f"[{text}]",
+            source_language=source_language,
+            target_language=target_language,
+            is_final=is_final,
+            provider=self.name,
+        )
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def slow_translation_factory(monkeypatch: pytest.MonkeyPatch):
+    """Install SlowFakeTranslationProvider as the translation factory."""
+    from app.websocket import translate_stream
+
+    created: list[SlowFakeTranslationProvider] = []
+
+    def factory() -> SlowFakeTranslationProvider:
+        provider = SlowFakeTranslationProvider(delay_sec=0.05)
+        created.append(provider)
+        return provider
+
+    monkeypatch.setattr(translate_stream, "create_translation_provider", factory)
+    return created
+
+
 @pytest.fixture
 def fake_translation_factory(monkeypatch: pytest.MonkeyPatch):
     """Install FakeTranslationProvider as the translation factory."""

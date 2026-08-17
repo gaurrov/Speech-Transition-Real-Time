@@ -35,9 +35,9 @@ services:
       - path: .env
         required: false
     environment:
-      ENVIRONMENT: development
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      LOG_FORMAT: console
+      LOG_FORMAT: ${LOG_FORMAT:-console}
       PORT: "8000"
       TRANSLATION_PROVIDER: ${TRANSLATION_PROVIDER:-nllb}
       NLLB_SERVICE_URL: http://nllb:8001

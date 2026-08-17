@@ -20,8 +20,10 @@ Environment variables
 ---------------------
 NLLB_MODEL_NAME      Model identifier (default: facebook/nllb-200-distilled-600M)
 NLLB_DEVICE          "cpu" or "cuda" (default: auto-detect cuda, fall back to cpu)
-NLLB_MAX_LENGTH      Max tokens for encode/decode (default: 128)
-NLLB_NUM_BEAMS       Beam search width (default: 4)
+NLLB_MAX_LENGTH      Max tokens for encode/decode (default: 80)
+NLLB_NUM_BEAMS       Beam search width (default: 1, greedy)
+NLLB_NUM_THREADS     CPU threads for torch inference (default: auto)
+NLLB_LENGTH_PENALTY  Generation length penalty (default: 1.0)
 NLLB_REQUEST_TIMEOUT Seconds before a translation request is cancelled (default: 30)
 NLLB_WARM_START      Load model at startup (default: true)
 """
@@ -106,11 +108,20 @@ def _device() -> str:
 
 
 def _max_length() -> int:
-    return int(os.environ.get("NLLB_MAX_LENGTH", "128"))
+    return int(os.environ.get("NLLB_MAX_LENGTH", "80"))
 
 
 def _num_beams() -> int:
-    return int(os.environ.get("NLLB_NUM_BEAMS", "4"))
+    return int(os.environ.get("NLLB_NUM_BEAMS", "1"))
+
+
+def _num_threads() -> int | None:
+    val = os.environ.get("NLLB_NUM_THREADS")
+    return int(val) if val else None
+
+
+def _length_penalty() -> float:
+    return float(os.environ.get("NLLB_LENGTH_PENALTY", "1.0"))
 
 
 def _request_timeout() -> float:
@@ -136,7 +147,20 @@ def _load_model() -> tuple[object, object]:
         if cached is not None:
             return cached
 
-        logger.info("nllb_model_load_start", model=_model_name(), device=_device())
+        import torch
+
+        num_threads = _num_threads()
+        if num_threads is not None and _device() == "cpu":
+            torch.set_num_threads(num_threads)
+
+        logger.info(
+            "nllb_model_load_start",
+            model=_model_name(),
+            device=_device(),
+            num_beams=_num_beams(),
+            max_length=_max_length(),
+            num_threads=num_threads,
+        )
         started = time.monotonic()
         tokenizer = AutoTokenizer.from_pretrained(_model_name())
         model = AutoModelForSeq2SeqLM.from_pretrained(_model_name()).to(_device())
@@ -157,12 +181,32 @@ def _load_model() -> tuple[object, object]:
 # ---------------------------------------------------------------------------
 
 
-def _translate_sync(text: str, source_lang: str, target_lang: str) -> str:
-    """Blocking translation call.  Invoked inside ``asyncio.to_thread``."""
+def _translate_sync(
+    text: str,
+    source_lang: str,
+    target_lang: str,
+    request_id: str,
+    queue_enter_ts: float,
+) -> tuple[str, dict[str, float]]:
+    """Blocking translation call.  Invoked inside ``asyncio.to_thread``.
+
+    Returns (translated_text, timing_dict) where timing_dict contains
+    monotonic timestamps for queue_enter, lock_acquired, inference_start,
+    inference_end.
+    """
     import torch
 
+    timing: dict[str, float] = {}
+    timing["queue_enter"] = queue_enter_ts
+
     model, tokenizer = _load_model()
+
+    # How long we waited behind _INFERENCE_LOCK (queueing delay).
+    timing["lock_acquired"] = time.monotonic()
+    queueing_ms = round((timing["lock_acquired"] - queue_enter_ts) * 1000, 1)
+
     with _INFERENCE_LOCK:
+        timing["inference_start"] = time.monotonic()
         tokenizer.src_lang = source_lang
         inputs = tokenizer(
             text,
@@ -176,8 +220,27 @@ def _translate_sync(text: str, source_lang: str, target_lang: str) -> str:
                 forced_bos_token_id=tokenizer.convert_tokens_to_ids(target_lang),
                 max_length=_max_length(),
                 num_beams=_num_beams(),
+                do_sample=False,
+                length_penalty=_length_penalty(),
             )
-        return tokenizer.decode(outputs[0], skip_special_tokens=True)
+        timing["inference_end"] = time.monotonic()
+        result = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    logger.info(
+        "nllb_inference",
+        request_id=request_id,
+        src=source_lang,
+        tgt=target_lang,
+        text_len=len(text),
+        queueing_ms=queueing_ms,
+        inference_ms=round(
+            (timing["inference_end"] - timing["inference_start"]) * 1000, 1
+        ),
+        total_ms=round(
+            (timing["inference_end"] - queue_enter_ts) * 1000, 1
+        ),
+    )
+    return result, timing
 
 
 # ---------------------------------------------------------------------------
@@ -221,12 +284,29 @@ async def translate(request: TranslateRequest) -> TranslateResponse:
 
     text_len = len(request.text)
     timeout = _request_timeout()
+    import uuid as _uuid
+
+    request_id = _uuid.uuid4().hex[:12]
+
+    logger.info(
+        "nllb_request_received",
+        request_id=request_id,
+        src=request.source_lang,
+        tgt=request.target_lang,
+        text_len=text_len,
+    )
 
     try:
         started = time.monotonic()
-        translated = await asyncio.wait_for(
+        queue_enter_ts = started
+        translated, timing = await asyncio.wait_for(
             asyncio.to_thread(
-                _translate_sync, request.text, request.source_lang, request.target_lang
+                _translate_sync,
+                request.text,
+                request.source_lang,
+                request.target_lang,
+                request_id,
+                queue_enter_ts,
             ),
             timeout=timeout,
         )
@@ -235,6 +315,7 @@ async def translate(request: TranslateRequest) -> TranslateResponse:
         _translation_latency_sum += latency_ms
         logger.info(
             "nllb_translate_ok",
+            request_id=request_id,
             src=request.source_lang,
             tgt=request.target_lang,
             text_len=text_len,
@@ -243,6 +324,7 @@ async def translate(request: TranslateRequest) -> TranslateResponse:
     except TimeoutError:
         logger.error(
             "nllb_translate_timeout",
+            request_id=request_id,
             src=request.source_lang,
             tgt=request.target_lang,
             text_len=text_len,
@@ -255,6 +337,7 @@ async def translate(request: TranslateRequest) -> TranslateResponse:
     except TranslationError as exc:
         logger.error(
             "nllb_translate_failed",
+            request_id=request_id,
             src=request.source_lang,
             tgt=request.target_lang,
             text_len=text_len,
@@ -265,6 +348,7 @@ async def translate(request: TranslateRequest) -> TranslateResponse:
     except Exception as exc:
         logger.error(
             "nllb_translate_error",
+            request_id=request_id,
             src=request.source_lang,
             tgt=request.target_lang,
             text_len=text_len,
@@ -289,6 +373,8 @@ async def health() -> dict:
         "model": _model_name(),
         "device": _device(),
         "model_loaded": model_loaded,
+        "num_beams": _num_beams(),
+        "max_length": _max_length(),
         "translation_count": _translation_count,
         "avg_latency_ms": avg_latency,
         "uptime_seconds": round(time.time() - _STARTED_AT, 1),
