@@ -169,7 +169,6 @@ class DeepgramASRProvider(ASRProvider):
             "endpointing": str(self._settings.deepgram_endpointing_ms),
             "utterance_end_ms": str(self._settings.deepgram_utterance_end_ms),
             "vad_events": "true",
-            "keepalive": "true",
         }
         if self._settings.deepgram_punctuate:
             params["punctuate"] = "true"
@@ -179,8 +178,6 @@ class DeepgramASRProvider(ASRProvider):
         language = self._language or "auto"
         if language == "auto":
             params["multilingual"] = "true"
-            if self._settings.deepgram_language_detection:
-                params["language_detection"] = "true"
         else:
             params["language"] = language
             if "," in language:
