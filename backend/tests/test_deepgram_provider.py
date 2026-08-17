@@ -11,6 +11,7 @@ import json
 
 import pytest
 import websockets
+from websockets.http11 import Response as WSResponse
 
 from app.config import Settings
 from app.models.schemas import TranscriptSegment
@@ -52,13 +53,18 @@ class FakeDeepgramServer:
         script: list[dict] | None = None,
         on_connect: list[dict] | None = None,
         drop_after_first_audio: bool = False,
+        reject_status: int | None = None,
+        reject_body: bytes = b"",
     ) -> None:
         self.script = script or []
         self.on_connect = on_connect or []
         self.drop_after_first_audio = drop_after_first_audio
+        self.reject_status = reject_status
+        self.reject_body = reject_body
         self.connections: list[websockets.ServerConnection] = []
         self.paths: list[str] = []
         self.auth_headers: list[str | None] = []
+        self.rejection_count = 0
         self.total_audio_bytes = 0
         self.controls: list[dict] = []
         self._script_sent = False
@@ -66,13 +72,23 @@ class FakeDeepgramServer:
         self._server = None
 
     async def start(self) -> str:
-        self._server = await websockets.serve(self._handler, "127.0.0.1", 0)
+        self._server = await websockets.serve(
+            self._handler, "127.0.0.1", 0, process_request=self._process_request
+        )
         return f"ws://127.0.0.1:{self._server.sockets[0].getsockname()[1]}"
 
     async def close(self) -> None:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
+
+    async def _process_request(
+        self, path: str, headers: websockets.Headers
+    ) -> WSResponse | None:
+        if self.reject_status is not None:
+            self.rejection_count += 1
+            return WSResponse(self.reject_status, "Rejected", websockets.Headers(), self.reject_body)
+        return None
 
     async def _handler(self, ws: websockets.ServerConnection) -> None:
         self.connections.append(ws)
@@ -270,7 +286,7 @@ async def test_auto_language_enables_detection() -> None:
 
     path = server.paths[-1]
     assert "multilingual=true" in path
-    assert "language_detection=true" in path
+    assert "language_detection" not in path
     assert "language=" not in path
     await server.close()
 
@@ -295,8 +311,8 @@ async def test_server_error_message_becomes_provider_error() -> None:
     await provider.connect(sample_rate=16_000, encoding="linear16", language="en")
     with pytest.raises(ASRProviderError) as exc_info:
         await _collect(provider, [])
-    assert exc_info.value.code == "deepgram_error"
-    assert "bad language config" in exc_info.value.message
+    assert exc_info.value.code == "deepgram_config"
+    assert "Deepgram rejected the request parameters" in exc_info.value.message
     await provider.close()
     await server.close()
 
@@ -351,3 +367,116 @@ async def test_connection_refused_is_provider_error() -> None:
         await _collect(provider, [])
     assert exc_info.value.code == "deepgram_connection"
     await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_http_400_handshake_rejection_is_config_error() -> None:
+    """HTTP 400 during WebSocket handshake → deepgram_config, no retry."""
+    server = FakeDeepgramServer(
+        reject_status=400,
+        reject_body=b'{"err_msg":"Invalid parameter: encoding"}',
+    )
+    url = await server.start()
+    provider = DeepgramASRProvider(_settings(url))
+    await provider.connect(sample_rate=16_000, encoding="linear16", language="en")
+    with pytest.raises(ASRProviderError) as exc_info:
+        await _collect(provider, [])
+    assert exc_info.value.code == "deepgram_config"
+    assert "Deepgram rejected the request parameters" in exc_info.value.message
+    # Should NOT retry: only one rejection, no connections established.
+    assert server.rejection_count == 1
+    assert len(server.connections) == 0
+    await provider.close()
+    await server.close()
+
+
+@pytest.mark.asyncio
+async def test_http_429_handshake_rejection_is_rate_limit() -> None:
+    """HTTP 429 during WebSocket handshake → deepgram_rate_limit, no retry."""
+    server = FakeDeepgramServer(
+        reject_status=429,
+        reject_body=b'{"err_msg":"Rate limit exceeded"}',
+    )
+    url = await server.start()
+    provider = DeepgramASRProvider(_settings(url))
+    await provider.connect(sample_rate=16_000, encoding="linear16", language="en")
+    with pytest.raises(ASRProviderError) as exc_info:
+        await _collect(provider, [])
+    assert exc_info.value.code == "deepgram_rate_limit"
+    assert "Deepgram rate limit exceeded" in exc_info.value.message
+    assert server.rejection_count == 1
+    assert len(server.connections) == 0
+    await provider.close()
+    await server.close()
+
+
+@pytest.mark.asyncio
+async def test_http_500_handshake_rejection_retries_then_fails() -> None:
+    """HTTP 500 during WebSocket handshake → transient, retries then fails."""
+    server = FakeDeepgramServer(
+        reject_status=500,
+        reject_body=b'{"err_msg":"Internal error"}',
+    )
+    url = await server.start()
+    provider = DeepgramASRProvider(
+        _settings(url, deepgram_reconnect_max_attempts=3, deepgram_reconnect_base_delay_ms=5)
+    )
+    await provider.connect(sample_rate=16_000, encoding="linear16", language="en")
+    with pytest.raises(ASRProviderError) as exc_info:
+        await _collect(provider, [])
+    assert exc_info.value.code == "deepgram_connection"
+    assert "Deepgram connect failed (HTTP 500)" in exc_info.value.message
+    assert "3 attempts" in exc_info.value.message
+    # Should have retried: one initial + retries = max_attempts total rejections.
+    assert server.rejection_count == 3
+    assert len(server.connections) == 0
+    await provider.close()
+    await server.close()
+
+
+@pytest.mark.asyncio
+async def test_in_band_400_is_config_error() -> None:
+    """In-band Error message with status 400 → deepgram_config."""
+    server = FakeDeepgramServer(
+        on_connect=[{"type": "Error", "message": "bad parameter", "status_code": 400}]
+    )
+    url = await server.start()
+    provider = DeepgramASRProvider(_settings(url))
+    await provider.connect(sample_rate=16_000, encoding="linear16", language="en")
+    with pytest.raises(ASRProviderError) as exc_info:
+        await _collect(provider, [])
+    assert exc_info.value.code == "deepgram_config"
+    await provider.close()
+    await server.close()
+
+
+@pytest.mark.asyncio
+async def test_in_band_429_is_rate_limit() -> None:
+    """In-band Error message with status 429 → deepgram_rate_limit."""
+    server = FakeDeepgramServer(
+        on_connect=[{"type": "Error", "message": "quota exceeded", "status_code": 429}]
+    )
+    url = await server.start()
+    provider = DeepgramASRProvider(_settings(url))
+    await provider.connect(sample_rate=16_000, encoding="linear16", language="en")
+    with pytest.raises(ASRProviderError) as exc_info:
+        await _collect(provider, [])
+    assert exc_info.value.code == "deepgram_rate_limit"
+    await provider.close()
+    await server.close()
+
+
+@pytest.mark.asyncio
+async def test_in_band_500_is_connection_error() -> None:
+    """In-band Error message with status 500 → deepgram_connection."""
+    server = FakeDeepgramServer(
+        on_connect=[{"type": "Error", "message": "server exploded", "status_code": 500}]
+    )
+    url = await server.start()
+    provider = DeepgramASRProvider(_settings(url))
+    await provider.connect(sample_rate=16_000, encoding="linear16", language="en")
+    with pytest.raises(ASRProviderError) as exc_info:
+        await _collect(provider, [])
+    assert exc_info.value.code == "deepgram_connection"
+    await provider.close()
+    await server.close()

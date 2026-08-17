@@ -189,6 +189,22 @@ class DeepgramASRProvider(ASRProvider):
         separator = "&" if "?" in self._settings.deepgram_endpoint else "?"
         return f"{self._settings.deepgram_endpoint}{separator}{urlencode(params)}"
 
+    @staticmethod
+    def _safe_response_body(exc: websockets.exceptions.InvalidStatus) -> str:
+        """Extract response body from an InvalidStatus exception safely.
+
+        Never logs API keys or authorization tokens.
+        """
+        if exc.response is None:
+            return ""
+        try:
+            body = exc.response.body
+            if body:
+                return body.decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        return ""
+
     async def _open_connection(self) -> websockets.ClientConnection:
         attempts = 0
         while not self._closed.is_set():
@@ -212,6 +228,7 @@ class DeepgramASRProvider(ASRProvider):
                     "asr_connected",
                     provider="deepgram",
                     model=self._settings.deepgram_model,
+                    encoding=self._encoding,
                     language=self._language,
                     sample_rate=self._sample_rate,
                 )
@@ -220,9 +237,27 @@ class DeepgramASRProvider(ASRProvider):
                 raise
             except websockets.exceptions.InvalidStatus as exc:
                 status = exc.response.status_code if exc.response is not None else 0
+                body_detail = self._safe_response_body(exc)
+                logger.warning(
+                    "asr_handshake_rejected",
+                    provider="deepgram",
+                    status_code=status,
+                    detail=body_detail,
+                )
                 if status in (401, 403):
                     raise ASRProviderError(
-                        "deepgram_auth", f"Deepgram rejected the API key (HTTP {status})"
+                        "deepgram_auth",
+                        "Deepgram authentication failed",
+                    ) from exc
+                if status == 400:
+                    raise ASRProviderError(
+                        "deepgram_config",
+                        "Deepgram rejected the request parameters",
+                    ) from exc
+                if status == 429:
+                    raise ASRProviderError(
+                        "deepgram_rate_limit",
+                        "Deepgram rate limit exceeded",
                     ) from exc
                 if attempts >= self._settings.deepgram_reconnect_max_attempts:
                     raise ASRProviderError(
@@ -230,11 +265,18 @@ class DeepgramASRProvider(ASRProvider):
                         f"Deepgram connect failed (HTTP {status}) after {attempts} attempts",
                     ) from exc
                 await self._backoff(attempts)
-            except (TimeoutError, Exception) as exc:
+            except (TimeoutError, asyncio.TimeoutError) as exc:
+                if attempts >= self._settings.deepgram_reconnect_max_attempts:
+                    raise ASRProviderError(
+                        "deepgram_timeout",
+                        f"Deepgram connection timed out after {attempts} attempts",
+                    ) from exc
+                await self._backoff(attempts)
+            except Exception as exc:
                 if attempts >= self._settings.deepgram_reconnect_max_attempts:
                     raise ASRProviderError(
                         "deepgram_connection",
-                        f"Could not connect to Deepgram: {exc}",
+                        f"Could not connect to Deepgram: {type(exc).__name__}",
                     ) from exc
                 await self._backoff(attempts)
         raise ASRProviderError("deepgram_closed", "Deepgram provider closed")
@@ -403,9 +445,15 @@ class DeepgramASRProvider(ASRProvider):
         message = payload.get("message") or payload.get("err_msg") or "Unknown Deepgram error"
         logger.warning("asr_error_message", provider="deepgram", status_code=status, message=message)
         if status in (401, 403):
-            self._fail(ASRProviderError("deepgram_auth", f"Deepgram auth failed: {message}"))
+            self._fail(ASRProviderError("deepgram_auth", "Deepgram authentication failed"))
+        elif status == 400:
+            self._fail(ASRProviderError("deepgram_config", "Deepgram rejected the request parameters"))
+        elif status == 429:
+            self._fail(ASRProviderError("deepgram_rate_limit", "Deepgram rate limit exceeded"))
+        elif status >= 500:
+            self._fail(ASRProviderError("deepgram_connection", "Deepgram server error"))
         elif status >= 400 or not status:
-            self._fail(ASRProviderError("deepgram_error", f"Deepgram error: {message}"))
+            self._fail(ASRProviderError("deepgram_error", "Deepgram reported an error"))
 
     # --- internal: latency estimation --------------------------------------
 

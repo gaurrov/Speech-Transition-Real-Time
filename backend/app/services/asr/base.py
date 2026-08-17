@@ -54,10 +54,20 @@ class ASRProviderError(Exception):
     """
     Recoverable-vs-not distinction for callers.
 
-    ``code`` is a stable machine-readable string (e.g. ``deepgram_auth``,
-    ``deepgram_connection``, ``deepgram_timeout``, ``deepgram_error``,
-    ``deepgram_config``) that the transport layer can surface as a typed
-    ``error`` event without knowing Deepgram internals.
+    ``code`` is a stable machine-readable string that the transport layer
+    can surface as a typed ``error`` event without knowing provider internals.
+
+    Known codes:
+
+    * ``deepgram_config`` — permanent: invalid parameters / 400
+    * ``deepgram_auth`` — permanent: missing or rejected API key / 401/403
+    * ``deepgram_rate_limit`` — permanent: quota or rate limit exceeded / 429
+    * ``deepgram_timeout`` — transient: connection timed out
+    * ``deepgram_connection`` — transient: network or server error
+    * ``deepgram_protocol`` — permanent: unexpected protocol behaviour
+    * ``deepgram_audio`` — permanent: audio format issue
+    * ``deepgram_closed`` — provider was closed externally
+    * ``deepgram_error`` — generic provider error
     """
 
     def __init__(self, code: str, message: str) -> None:

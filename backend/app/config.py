@@ -9,18 +9,15 @@ import from anywhere in the app, including tests.
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_REPO_ROOT / ".env"),
+        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
@@ -50,7 +47,7 @@ class Settings(BaseSettings):
     deepgram_endpoint: str = "wss://api.deepgram.com/v1/listen"
     deepgram_interim_results: bool = True
     deepgram_endpointing_ms: int = 600  # silence (ms) after which Deepgram finalizes an utterance
-    deepgram_utterance_end_ms: int = 900  # utterance_end marker (>= endpointing)
+    deepgram_utterance_end_ms: int = 1000  # utterance_end marker (>= endpointing)
     deepgram_punctuate: bool = True
     deepgram_smart_format: bool = True
     deepgram_language_detection: bool = True  # used when source_language == "auto"
