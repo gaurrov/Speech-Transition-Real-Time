@@ -338,11 +338,17 @@ def _segment(**overrides) -> TranslationSegment:
     return TranslationSegment(**defaults)
 
 
+def _hybrid_settings(**overrides) -> Settings:
+    """Settings with a cloud API key so the hybrid provider doesn't short-circuit."""
+    kwargs = {"cloud_translation_api_key": "test-key", **overrides}
+    return Settings(**kwargs)
+
+
 @pytest.mark.asyncio
 async def test_hybrid_cloud_success_skips_fallback() -> None:
     cloud = _FakeProvider("cloud", _segment(provider="cloud"))
     nllb = _FakeProvider("nllb", _segment(provider="nllb"))
-    hybrid = HybridTranslationProvider(cloud=cloud, nllb=nllb)
+    hybrid = HybridTranslationProvider(settings=_hybrid_settings(), cloud=cloud, nllb=nllb)
 
     result = await hybrid.translate(
         segment_id="seg-1",
@@ -364,7 +370,7 @@ async def test_hybrid_cloud_failure_falls_back_to_nllb() -> None:
         error=TranslationError("cloud_connection", "boom"),
     )
     nllb = _FakeProvider("nllb", _segment(provider="nllb"))
-    hybrid = HybridTranslationProvider(cloud=cloud, nllb=nllb)
+    hybrid = HybridTranslationProvider(settings=_hybrid_settings(), cloud=cloud, nllb=nllb)
 
     result = await hybrid.translate(
         segment_id="seg-1",
@@ -390,7 +396,7 @@ async def test_hybrid_both_fail_raises_translation_failed() -> None:
         _segment(provider="nllb"),
         error=TranslationError("nllb_model_unavailable", "no torch"),
     )
-    hybrid = HybridTranslationProvider(cloud=cloud, nllb=nllb)
+    hybrid = HybridTranslationProvider(settings=_hybrid_settings(), cloud=cloud, nllb=nllb)
 
     with pytest.raises(TranslationError) as exc:
         await hybrid.translate(
@@ -407,7 +413,7 @@ async def test_hybrid_both_fail_raises_translation_failed() -> None:
 async def test_hybrid_warm_up_noop_and_close() -> None:
     cloud = _FakeProvider("cloud", _segment(provider="cloud"))
     nllb = _FakeProvider("nllb", _segment(provider="nllb"))
-    hybrid = HybridTranslationProvider(cloud=cloud, nllb=nllb)
+    hybrid = HybridTranslationProvider(settings=_hybrid_settings(), cloud=cloud, nllb=nllb)
 
     await hybrid.warm_up()
     await hybrid.close()

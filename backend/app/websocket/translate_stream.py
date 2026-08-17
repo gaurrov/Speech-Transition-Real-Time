@@ -42,6 +42,7 @@ from app.services.llm import create_llm_provider
 from app.services.llm.base import LLMProvider
 from app.services.translation import create_translation_provider
 from app.services.translation.base import TranslationError, TranslationProvider
+from app.services.translation.languages import detect_language
 from app.services.vad.base import SilenceDetector
 
 logger = structlog.get_logger(__name__)
@@ -301,6 +302,14 @@ class Session:
                 # The ASR final latency is threaded through so the translation
                 # latency report can carry a true server-side end-to-end figure.
                 if segment.is_final and self.translation_queue is not None:
+                    logger.info(
+                        "translation_enqueued",
+                        session_id=self.session_id,
+                        segment_id=segment.segment_id,
+                        text_len=len(segment.text),
+                        source_language=config.source_language,
+                        target_language=config.target_language,
+                    )
                     self.translation_queue.put_nowait(
                         (
                             segment.segment_id,
@@ -368,23 +377,42 @@ class Session:
             return
         while True:
             segment_id, text, asr_final_ms = await queue.get()
+            logger.info(
+                "translation_dequeued",
+                session_id=self.session_id,
+                segment_id=segment_id,
+                text_len=len(text),
+                provider=translator.name,
+            )
             started = time.monotonic()
+            # Resolve "auto" source language before calling the provider.
+            # NLLB (in-process and service) cannot auto-detect; the cloud
+            # provider handles "auto" natively but a concrete code is just
+            # as good and avoids the fallback error path in hybrid mode.
+            source_language = (
+                detect_language(text)
+                if config.source_language == "auto"
+                else config.source_language
+            )
             try:
                 result = await translator.translate(
                     segment_id=segment_id,
                     text=text,
-                    source_language=config.source_language,
+                    source_language=source_language,
                     target_language=config.target_language,
                     is_final=True,
                 )
             except asyncio.CancelledError:
                 raise
             except TranslationError as exc:
+                elapsed_ms = round((time.monotonic() - started) * 1000, 1)
                 logger.warning(
                     "translation_failed",
                     session_id=self.session_id,
+                    segment_id=segment_id,
                     code=exc.code,
                     message=exc.message,
+                    elapsed_ms=elapsed_ms,
                 )
                 await self.send_event(
                     schemas.ErrorMessage(
@@ -395,10 +423,13 @@ class Session:
                 )
                 continue
             except Exception as exc:
+                elapsed_ms = round((time.monotonic() - started) * 1000, 1)
                 logger.warning(
                     "translation_failed",
                     session_id=self.session_id,
+                    segment_id=segment_id,
                     error=str(exc),
+                    elapsed_ms=elapsed_ms,
                 )
                 await self.send_event(
                     schemas.ErrorMessage(
@@ -410,6 +441,14 @@ class Session:
                 continue
 
             translation_ms = round((time.monotonic() - started) * 1000, 1)
+            logger.info(
+                "translation_ok",
+                session_id=self.session_id,
+                segment_id=result.segment_id,
+                provider=result.provider,
+                translation_ms=translation_ms,
+                translated_len=len(result.translated_text),
+            )
             # Server-side live-path end-to-end: T2 -> T6. ASR final latency
             # ends at T4 and translation begins immediately after (T5 ~ T4),
             # so end_to_end = asr_final + translation. Refinement is excluded.

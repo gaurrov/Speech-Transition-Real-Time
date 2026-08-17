@@ -112,3 +112,73 @@ def nllb_code(code: str) -> str:
             "unsupported_language", f"No NLLB mapping for language: {code!r}"
         )
     return language.nllb_code
+
+
+# ---------------------------------------------------------------------------
+# Lightweight language detection via Unicode character ranges.
+# ---------------------------------------------------------------------------
+
+# (start_codepoint, end_codepoint, iso_code) — order matters: more specific
+# scripts are checked first (e.g. Japanese kana before generic CJK).
+_SCRIPT_RANGES: list[tuple[int, int, str]] = [
+    (0x3040, 0x309F, "ja"),  # Hiragana
+    (0x30A0, 0x30FF, "ja"),  # Katakana
+    (0xAC00, 0xD7AF, "ko"),  # Hangul Syllables
+    (0x0900, 0x097F, "hi"),  # Devanagari
+    (0x0B80, 0x0BFF, "ta"),  # Tamil
+    (0x0C00, 0x0C7F, "te"),  # Telugu
+    (0x0C80, 0x0CFF, "kn"),  # Kannada
+    (0x0D00, 0x0D7F, "ml"),  # Malayalam
+    (0x0600, 0x06FF, "ar"),  # Arabic
+    (0x0400, 0x04FF, "ru"),  # Cyrillic
+    (0x4E00, 0x9FFF, "zh"),  # CJK Unified Ideographs (Chinese/Japanese shared range)
+]
+
+# Minimum fraction of characters that must match a script for detection.
+_DETECTION_THRESHOLD = 0.3
+
+
+def detect_language(text: str) -> str:
+    """Detect the language of *text* using Unicode script analysis.
+
+    Returns an ISO 639-1 code (e.g. ``"en"``, ``"hi"``) suitable for
+    ``nllb_code()`` or ``cloud_code()``.  Falls back to ``"en"`` when the
+    text is too short or uses Latin script (which covers English, Spanish,
+    French, German, and Portuguese — all Latin-script languages in the
+    registry).
+
+    This is a heuristic: it works well for the languages this app supports
+    and requires zero external dependencies.  It is *not* suitable for
+    disambiguating closely related scripts (e.g. Hindi vs. Marathi) — use a
+    proper CLD3/CLD2 library for that.
+    """
+    if not text or not text.strip():
+        return "en"
+
+    total_alpha = 0
+    script_counts: dict[str, int] = {}
+    for ch in text:
+        if not ch.isalpha():
+            continue
+        total_alpha += 1
+        cp = ord(ch)
+        for start, end, code in _SCRIPT_RANGES:
+            if start <= cp <= end:
+                script_counts[code] = script_counts.get(code, 0) + 1
+                break
+
+    if total_alpha == 0:
+        return "en"
+
+    # Find the dominant script.
+    best_code = "en"
+    best_count = 0
+    for code, count in script_counts.items():
+        if count > best_count:
+            best_count = count
+            best_code = code
+
+    if best_count / total_alpha >= _DETECTION_THRESHOLD:
+        return best_code
+
+    return "en"

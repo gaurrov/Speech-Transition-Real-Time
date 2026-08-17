@@ -46,35 +46,49 @@ class HybridTranslationProvider(TranslationProvider):
         target_language: str,
         is_final: bool,
     ) -> TranslationSegment:
-        try:
-            return await self._cloud.translate(
-                segment_id=segment_id,
-                text=text,
-                source_language=source_language,
-                target_language=target_language,
-                is_final=is_final,
-            )
-        except TranslationError as cloud_error:
-            logger.warning(
-                "translation_cloud_failed",
-                code=cloud_error.code,
-                message=cloud_error.message,
-                fallback="nllb",
-                segment_id=segment_id,
-            )
+        # Short-circuit: if the cloud API key is not configured, skip the cloud
+        # provider entirely instead of raising + catching TranslationError on
+        # every single utterance.  This avoids per-utterance log spam and makes
+        # the fallback path explicit.
+        cloud_configured = bool(self._settings.cloud_translation_api_key)
+        if cloud_configured:
             try:
-                return await self._nllb.translate(
+                return await self._cloud.translate(
                     segment_id=segment_id,
                     text=text,
                     source_language=source_language,
                     target_language=target_language,
                     is_final=is_final,
                 )
-            except TranslationError as nllb_error:
-                raise TranslationError(
-                    "translation_failed",
-                    f"Cloud and NLLB both failed: {nllb_error.message}",
-                ) from nllb_error
+            except TranslationError as cloud_error:
+                logger.warning(
+                    "translation_cloud_failed",
+                    code=cloud_error.code,
+                    message=cloud_error.message,
+                    fallback="nllb",
+                    segment_id=segment_id,
+                )
+        else:
+            logger.debug(
+                "translation_cloud_skipped",
+                reason="no_api_key",
+                fallback="nllb",
+                segment_id=segment_id,
+            )
+
+        try:
+            return await self._nllb.translate(
+                segment_id=segment_id,
+                text=text,
+                source_language=source_language,
+                target_language=target_language,
+                is_final=is_final,
+            )
+        except TranslationError as nllb_error:
+            raise TranslationError(
+                "translation_failed",
+                f"{'Cloud and NLLB both' if cloud_configured else 'NLLB'} failed: {nllb_error.message}",
+            ) from nllb_error
 
     async def warm_up(self) -> None:
         # Intentionally a no-op: NLLB is loaded lazily on first fallback so

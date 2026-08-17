@@ -102,6 +102,12 @@ class NLLBTranslationProvider(TranslationProvider):
                 "nllb_model_unavailable", "NLLB model failed to load"
             )
         # Resolve codes first so an unsupported language fails fast and clearly.
+        if source_language == "auto":
+            raise TranslationError(
+                "unsupported_language",
+                "NLLB does not support auto-detect; configure a concrete "
+                "source language or use a cloud/hybrid provider with an API key",
+            )
         nllb_code(source_language)
         nllb_code(target_language)
 

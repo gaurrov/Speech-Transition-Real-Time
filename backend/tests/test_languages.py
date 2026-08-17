@@ -8,6 +8,7 @@ from app.services.translation.languages import (
     Language,
     apply_extra_languages,
     cloud_code,
+    detect_language,
     get_language,
     is_supported,
     nllb_code,
@@ -109,3 +110,70 @@ def test_apply_extra_languages() -> None:
 def test_apply_extra_languages_none_is_noop() -> None:
     apply_extra_languages(None)
     assert is_supported("en")
+
+
+# --- detect_language ---------------------------------------------------------
+
+
+def test_detect_language_latin_defaults_to_english() -> None:
+    assert detect_language("Hello world") == "en"
+    assert detect_language("Bonjour le monde") == "en"  # Latin script → "en"
+
+
+def test_detect_language_hindi() -> None:
+    assert detect_language("नमस्ते दुनिया") == "hi"
+
+
+def test_detect_language_tamil() -> None:
+    assert detect_language("வணக்கம் உலகம்") == "ta"
+
+
+def test_detect_language_telugu() -> None:
+    assert detect_language("హలో ప్రపంచం") == "te"
+
+
+def test_detect_language_kannada() -> None:
+    assert detect_language("ಹಲೋ ಜಗತ್ತು") == "kn"
+
+
+def test_detect_language_malayalam() -> None:
+    assert detect_language("ഹലോ ലോകം") == "ml"
+
+
+def test_detect_language_japanese() -> None:
+    assert detect_language("こんにちは世界") == "ja"  # Hiragana
+    assert detect_language("カタカナテスト") == "ja"  # Katakana
+
+
+def test_detect_language_korean() -> None:
+    assert detect_language("안녕하세요 세계") == "ko"
+
+
+def test_detect_language_chinese() -> None:
+    assert detect_language("你好世界") == "zh"
+
+
+def test_detect_language_arabic() -> None:
+    assert detect_language("مرحبا بالعالم") == "ar"
+
+
+def test_detect_language_russian() -> None:
+    assert detect_language("Привет мир") == "ru"
+
+
+def test_detect_language_empty_string() -> None:
+    assert detect_language("") == "en"
+
+
+def test_detect_language_whitespace_only() -> None:
+    assert detect_language("   ") == "en"
+
+
+def test_detect_language_numbers_and_punctuation() -> None:
+    assert detect_language("123 !@#") == "en"
+
+
+def test_detect_language_mixed_scripts_picks_dominant() -> None:
+    # Predominantly Hindi with some English
+    text = "नमस्ते this is a test दुनिया में आपका स्वागत है"
+    assert detect_language(text) == "hi"
