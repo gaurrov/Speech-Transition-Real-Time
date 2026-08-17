@@ -151,6 +151,10 @@ export function useTranslatorSession({
           provider: event.provider,
         }
         setLatestTranslation(segment)
+        if (event.provider === "pending") {
+          setStatus("translating")
+          break
+        }
         if (event.is_final) {
           setTranslationSegments((prev) => [
             ...prev.filter((existing) => existing.segment_id !== event.segment_id),

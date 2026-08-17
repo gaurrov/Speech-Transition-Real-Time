@@ -308,6 +308,18 @@ class Session:
                             segment.asr_latency_ms,
                         )
                     )
+                    await self.send_event(
+                        schemas.TranslationEvent(
+                            session_id=self.session_id,
+                            segment_id=segment.segment_id,
+                            source_text=segment.text,
+                            translated_text="",
+                            source_language=config.source_language,
+                            target_language=config.target_language,
+                            is_final=False,
+                            provider="pending",
+                        )
+                    )
 
                 # Async LLM refinement: enqueue right after finalization, but
                 # NEVER await the result before the final transcript/translation
@@ -493,8 +505,6 @@ class Session:
     async def send_event(self, event: schemas.ServerEvent) -> None:
         async with self._send_lock:
             try:
-                # Serialize once to JSON-safe primitives (compact, like the
-                # built-in send_json); audio stays binary on the wire.
                 text = json.dumps(
                     event.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False
                 )

@@ -235,6 +235,11 @@ def test_partial_and_final_transcripts_are_forwarded(
         translation = ws.receive_json()
         assert translation["type"] == "translation"
         assert translation["segment_id"] == "seg-0"
+        # Skip the pending placeholder sent when the transcript was finalized.
+        if translation["provider"] == "pending":
+            translation = ws.receive_json()
+            assert translation["type"] == "translation"
+            assert translation["segment_id"] == "seg-0"
         assert translation["source_text"] == "We need to discuss the project."
         assert translation["translated_text"] == "[We need to discuss the project.]"
         assert translation["source_language"] == "en"
@@ -319,11 +324,20 @@ def test_short_silence_does_not_send_endpointing_hint(fake_asr_factory) -> None:
         assert provider.silence_hints == []
 
 
-def _drain_until(ws, event_type: str, count: int, max_events: int = 30) -> list[dict]:
+def _drain_until(
+    ws,
+    event_type: str,
+    count: int,
+    max_events: int = 30,
+    *,
+    skip_pred=None,
+) -> list[dict]:
     found = []
     for _ in range(max_events):
         event = ws.receive_json()
         if event["type"] == event_type:
+            if skip_pred and skip_pred(event):
+                continue
             found.append(event)
             if len(found) == count:
                 return found
@@ -401,7 +415,12 @@ def test_finalized_utterances_translate_in_order(
                 ),
             ]
         )
-        translations = _drain_until(ws, "translation", 2)
+        translations = _drain_until(
+            ws,
+            "translation",
+            2,
+            skip_pred=lambda e: e.get("provider") == "pending",
+        )
         assert [t["segment_id"] for t in translations] == ["seg-1", "seg-2"]
         assert [t["translated_text"] for t in translations] == [
             "[First idea.]",
@@ -426,7 +445,12 @@ def test_translation_uses_session_languages(
         provider.script(
             [TranscriptSegment(segment_id="seg-0", text="नमस्ते", is_final=True)]
         )
-        translation = _drain_until(ws, "translation", 1)[0]
+        translation = _drain_until(
+            ws,
+            "translation",
+            1,
+            skip_pred=lambda e: e.get("provider") == "pending",
+        )[0]
         assert translation["source_language"] == "hi"
         assert translation["target_language"] == "en"
         assert translator.calls[0]["source_language"] == "hi"
@@ -457,7 +481,12 @@ def test_translation_failure_is_non_fatal(
             if event["type"] == "error":
                 assert event["code"] == "translation_failed"
                 break
-        translations = _drain_until(ws, "translation", 1)
+        translations = _drain_until(
+            ws,
+            "translation",
+            1,
+            skip_pred=lambda e: e.get("provider") == "pending",
+        )
         assert translations[0]["segment_id"] == "seg-2"
         assert translations[0]["translated_text"] == "[Fine.]"
 
@@ -521,7 +550,11 @@ def test_refinement_is_dispatched_and_does_not_block_translation(
         assert "translation" in types
         assert types.index("translation") < types.index("refined_transcript")
 
-        translation = next(e for e in events if e["type"] == "translation")
+        translation = next(
+            e
+            for e in events
+            if e["type"] == "translation" and e.get("provider") != "pending"
+        )
         assert translation["translated_text"] == "[we need to deploy by friday]"
         assert translator.calls == [
             {
@@ -601,7 +634,12 @@ def test_refinement_failure_is_non_fatal_and_translation_continues(
             ]
         )
 
-        translations = _drain_until(ws, "translation", 2)
+        translations = _drain_until(
+            ws,
+            "translation",
+            2,
+            skip_pred=lambda e: e.get("provider") == "pending",
+        )
         assert [t["segment_id"] for t in translations] == ["seg-1", "seg-2"]
 
         # No refinement correction ever arrives; the session just keeps going.
