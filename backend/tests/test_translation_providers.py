@@ -431,10 +431,13 @@ def test_factory_cloud_mode(monkeypatch) -> None:
 
 
 def test_factory_nllb_mode(monkeypatch) -> None:
-    settings = Settings(translation_provider="nllb")
+    settings = Settings(
+        translation_provider="nllb",
+        nllb_service_url="http://nllb:8001",
+    )
     monkeypatch.setattr("app.services.translation.get_settings", lambda: settings)
     provider = create_translation_provider()
-    # With nllb_service_url set (default), the factory picks the service provider.
+    # With nllb_service_url set, the factory picks the service provider.
     from app.services.translation.nllb_service_provider import NLLBServiceProvider
 
     assert isinstance(provider, NLLBServiceProvider)
@@ -501,6 +504,7 @@ def test_cloud_provider_not_imported_when_nllb(monkeypatch) -> None:
     settings = Settings(
         translation_provider="nllb",
         cloud_translation_api_key=None,
+        nllb_service_url="http://nllb:8001",
     )
     monkeypatch.setattr("app.services.translation.get_settings", lambda: settings)
     # Ensure cloud_provider module is not already loaded from a prior test

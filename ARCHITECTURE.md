@@ -138,10 +138,12 @@ pipeline never branches on language pairs. `create_translation_provider()` in
 `translation/__init__.py` is the only entry point the transport uses. See
 `docs/translation.md` for the full design.
 
-NLLB-200 runs as a dedicated container (`nllb`) on port 8001, always started
-with the stack. The backend connects to it via `NLLB_SERVICE_URL=http://nllb:8001`
-(set automatically by docker-compose). The NLLB container is not published to
-the host — it is only reachable from the backend inside the Docker network.
+NLLB-200 runs as a dedicated container (`nllb`) on port 8001 in Docker
+(Docker compose sets `NLLB_SERVICE_URL=http://nllb:8001` automatically). For
+local development, `NLLB_SERVICE_URL` defaults to `None`, which makes the
+factory use the in-process `NLLBTranslationProvider` (requires the `offline`
+extra: `uv sync --extra offline`). The NLLB container is not published to the
+host — it is only reachable from the backend inside the Docker network.
 
 ### `LLMProvider` (`backend/app/services/llm/base.py`)
 

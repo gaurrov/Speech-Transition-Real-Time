@@ -78,11 +78,16 @@ that keep business logic decoupled from any single vendor.
   provider, an LLM provider) — see `.env.example`. None are required to run the
   scaffold: `/health` and the frontend shell need no external providers.
 
+> **Translation in local dev:** NLLB-200 is the default translation provider.
+> In local dev it runs in-process (via `uv sync --extra offline`), requiring
+> Python 3.11/3.12 for `torch` + `transformers`. In Docker, translation runs
+> in a dedicated container — no offline extra needed.
+
 > Python version note: the backend pins `requires-python = ">=3.11"`. The core
-> dependencies run fine on 3.14. Only the *offline* extra (`torch`,
-> `transformers`, for NLLB-200) is constrained to 3.11/3.12 because those
-> packages do not yet ship stable wheels for 3.14 — install it with
-> `uv sync --extra offline` only if you need the offline fallback.
+> dependencies run fine on 3.14. The *offline* extra (`torch`, `transformers`,
+> for NLLB-200) is constrained to 3.11/3.12 because those packages do not yet
+> ship stable wheels for 3.14 — install it with `uv sync --extra offline` for
+> local dev translation.
 
 ## Getting started
 
@@ -94,6 +99,16 @@ uv sync                         # creates/updates .venv and installs deps
 cp ../.env.example .env         # then fill in DEEPGRAM_API_KEY etc. (optional)
 uv run uvicorn app.main:app --reload --port 8000
 ```
+
+For **translation** in local dev, you also need the offline NLLB-200 runtime:
+
+```bash
+uv sync --extra offline         # installs torch + transformers for NLLB-200
+```
+
+Without the `offline` extra, translation will fail with `nllb_model_unavailable`
+on every utterance. In Docker this is not needed — the NLLB container handles
+translation.
 
 Verify it's up:
 

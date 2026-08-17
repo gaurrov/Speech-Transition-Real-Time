@@ -83,8 +83,10 @@ class Settings(BaseSettings):
     nllb_num_beams: int = 4
     # NLLB-200 is served by a separate, internal NLLB service over HTTP
     # instead of loading torch in-process (keeps the main backend image small).
-    # The service is never exposed publicly.
-    nllb_service_url: str | None = "http://localhost:8001"
+    # When None (the default), the factory falls back to the in-process
+    # NLLBTranslationProvider (requires `uv sync --extra offline`). Docker
+    # compose sets this to http://nllb:8001 automatically.
+    nllb_service_url: str | None = None
     nllb_service_timeout_sec: float = 30.0
 
     # --- LLM (async post-processing / refinement) ---

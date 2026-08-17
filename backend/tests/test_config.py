@@ -17,7 +17,7 @@ def test_defaults_are_sane() -> None:
     assert settings.audio_sample_rate == 16_000
     assert settings.cors_allow_origins == ["http://localhost:5173"]
     assert settings.log_format == "console"
-    assert settings.nllb_service_url == "http://localhost:8001"
+    assert settings.nllb_service_url is None
     assert settings.ws_allowed_origins is None
 
 
