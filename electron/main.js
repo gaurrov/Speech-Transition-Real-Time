@@ -181,7 +181,7 @@ function createWindow() {
     frame: false,
     resizable: true,
     alwaysOnTop: true,
-    backgroundColor: "#ffffff",
+    backgroundColor: "#0f172a",
     title: "Live Translator",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

@@ -24,7 +24,7 @@ export function CompactLanguageSelect({
         disabled={disabled}
         aria-label={ariaLabel}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full appearance-none truncate rounded-md border border-slate-200 bg-white py-1 pl-2.5 pr-7 text-[12px] font-medium text-slate-700 focus:border-indigo-400 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60"
+        className="w-full appearance-none truncate rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-3 pr-7 text-[12px] font-medium text-slate-700 transition-colors focus:border-indigo-400 focus:bg-white focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
       >
         {options.map((option) => (
           <option key={option.code} value={option.code}>

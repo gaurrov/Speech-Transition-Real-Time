@@ -61,10 +61,10 @@ function HeaderButton({
       onClick={onClick}
       aria-label={label}
       title={title}
-      className={`app-no-drag flex h-5 w-5 items-center justify-center rounded text-slate-400 transition-colors ${
+      className={`app-no-drag flex h-6 w-6 items-center justify-center rounded-md transition-colors ${
         danger
-          ? "hover:bg-rose-50 hover:text-rose-600"
-          : "hover:bg-slate-100 hover:text-slate-600"
+          ? "text-slate-400 hover:bg-rose-500/10 hover:text-rose-400"
+          : "text-slate-400 hover:bg-white/10 hover:text-slate-200"
       }`}
     >
       {children}
@@ -89,18 +89,20 @@ export function CompactHeader({
   const meta = statusMeta(status)
 
   return (
-    <header className="app-drag flex shrink-0 items-center gap-1.5 border-b border-slate-200/80 bg-slate-50/50 px-2.5 py-1.5">
+    <header className="app-drag flex shrink-0 items-center gap-2 bg-slate-900 px-3 py-2">
       {/* App icon + language pair */}
-      <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-indigo-600 text-white">
-        <GlobeIcon className="h-3 w-3" />
+      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-indigo-500 text-white">
+        <GlobeIcon className="h-3.5 w-3.5" />
       </div>
-      <span className="min-w-0 truncate text-[12px] font-semibold text-slate-700">
-        {sourceLabel}
-      </span>
-      <span className="text-[10px] text-slate-300">→</span>
-      <span className="min-w-0 truncate text-[12px] font-semibold text-slate-700">
-        {targetLabel}
-      </span>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="truncate text-[13px] font-semibold text-white">
+          {sourceLabel}
+        </span>
+        <span className="text-[11px] text-slate-500">→</span>
+        <span className="truncate text-[13px] font-semibold text-white">
+          {targetLabel}
+        </span>
+      </div>
 
       {/* Spacer */}
       <div className="flex-1" />
@@ -109,12 +111,12 @@ export function CompactHeader({
       <div
         role="status"
         aria-live="polite"
-        className="flex items-center gap-1"
+        className="flex items-center gap-1.5"
         title={meta.label}
       >
         <span className={`h-2 w-2 rounded-full ${meta.dotClass}`} aria-hidden="true" />
         {expanded && (
-          <span className={`text-[10px] font-medium ${meta.textClass}`}>{meta.label}</span>
+          <span className="text-[10px] font-medium text-slate-400">{meta.label}</span>
         )}
       </div>
 
@@ -125,7 +127,7 @@ export function CompactHeader({
           label="Open settings"
           title="Settings"
         >
-          <GearIcon className="h-3 w-3" />
+          <GearIcon className="h-3.5 w-3.5" />
         </HeaderButton>
 
         <HeaderButton
@@ -134,9 +136,9 @@ export function CompactHeader({
           title={expanded ? "Compact" : "Overlay"}
         >
           {expanded ? (
-            <ShrinkIcon className="h-3 w-3" />
+            <ShrinkIcon className="h-3.5 w-3.5" />
           ) : (
-            <OverlayIcon className="h-3 w-3" />
+            <OverlayIcon className="h-3.5 w-3.5" />
           )}
         </HeaderButton>
 
@@ -146,19 +148,19 @@ export function CompactHeader({
             label={pinned ? "Unpin" : "Pin on top"}
             title={pinned ? "Pinned" : "Pin"}
           >
-            <PinIcon className={`h-3 w-3 ${pinned ? "text-indigo-500" : ""}`} />
+            <PinIcon className={`h-3.5 w-3.5 ${pinned ? "text-indigo-400" : ""}`} />
           </HeaderButton>
         )}
 
         {inElectron && (
           <HeaderButton onClick={onMinimize} label="Minimize" title="Minimize">
-            <MinimizeIcon className="h-3 w-3" />
+            <MinimizeIcon className="h-3.5 w-3.5" />
           </HeaderButton>
         )}
 
         {inElectron && (
           <HeaderButton onClick={onClose} label="Close" title="Close" danger>
-            <XIcon className="h-3 w-3" />
+            <XIcon className="h-3.5 w-3.5" />
           </HeaderButton>
         )}
       </div>

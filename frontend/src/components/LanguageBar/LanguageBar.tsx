@@ -22,7 +22,7 @@ export function LanguageBar({
   disabled = false,
 }: LanguageBarProps) {
   return (
-    <div className="flex items-center gap-2 px-3 py-2">
+    <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5">
       <CompactLanguageSelect
         value={sourceValue}
         options={sourceOptions}
