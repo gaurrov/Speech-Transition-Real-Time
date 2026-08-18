@@ -14,6 +14,27 @@ import type {
   TranscriptSegment,
 } from "../types"
 
+function mapErrorToUserMessage(code: string): string {
+  switch (code) {
+    case "deepgram_config":
+      return "Speech recognition couldn't start. Please check your language settings."
+    case "deepgram_auth":
+      return "Speech recognition service authentication failed."
+    case "deepgram_rate_limit":
+      return "Speech recognition rate limit reached. Please wait a moment."
+    case "deepgram_timeout":
+      return "Unable to connect to speech recognition service."
+    case "deepgram_connection":
+      return "Speech recognition connection lost."
+    case "deepgram_error":
+      return "Speech recognition encountered an error."
+    case "no_active_session":
+      return "No active session. Please start again."
+    default:
+      return "An unexpected error occurred."
+  }
+}
+
 export interface UseTranslatorSessionOptions {
   mode?: SessionMode
   translationAvailable?: boolean | null
@@ -245,7 +266,6 @@ export function useTranslatorSession({
         }
         break
       case "error": {
-        // Translation failures are non-fatal: the session keeps running.
         const isTranslationError =
           event.code === "translation_failed" || event.code === "translation_timeout"
         if (isTranslationError) {
@@ -258,7 +278,8 @@ export function useTranslatorSession({
           setStatus("listening")
           break
         }
-        setError(event.message)
+        const friendlyMessage = mapErrorToUserMessage(event.code)
+        setError(friendlyMessage)
         setStatus("error")
         break
       }

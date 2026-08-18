@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # --- ASR (Automatic Speech Recognition) ---
     asr_provider: Literal["deepgram"] = "deepgram"
     deepgram_api_key: str | None = None
-    deepgram_model: str = "nova-2"
+    deepgram_model: str = "nova-3"
     # Base websocket endpoint for streaming listen (override for tests / proxies).
     deepgram_endpoint: str = "wss://api.deepgram.com/v1/listen"
     deepgram_interim_results: bool = True

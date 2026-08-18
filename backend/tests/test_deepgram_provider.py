@@ -312,7 +312,7 @@ async def test_server_error_message_becomes_provider_error() -> None:
     with pytest.raises(ASRProviderError) as exc_info:
         await _collect(provider, [])
     assert exc_info.value.code == "deepgram_config"
-    assert "Deepgram rejected the request parameters" in exc_info.value.message
+    assert "Speech recognition" in exc_info.value.message
     await provider.close()
     await server.close()
 
@@ -382,8 +382,7 @@ async def test_http_400_handshake_rejection_is_config_error() -> None:
     with pytest.raises(ASRProviderError) as exc_info:
         await _collect(provider, [])
     assert exc_info.value.code == "deepgram_config"
-    assert "Deepgram rejected the request parameters" in exc_info.value.message
-    # Should NOT retry: only one rejection, no connections established.
+    assert "Speech recognition" in exc_info.value.message
     assert server.rejection_count == 1
     assert len(server.connections) == 0
     await provider.close()
@@ -403,7 +402,7 @@ async def test_http_429_handshake_rejection_is_rate_limit() -> None:
     with pytest.raises(ASRProviderError) as exc_info:
         await _collect(provider, [])
     assert exc_info.value.code == "deepgram_rate_limit"
-    assert "Deepgram rate limit exceeded" in exc_info.value.message
+    assert "rate limit" in exc_info.value.message.lower()
     assert server.rejection_count == 1
     assert len(server.connections) == 0
     await provider.close()
@@ -425,9 +424,7 @@ async def test_http_500_handshake_rejection_retries_then_fails() -> None:
     with pytest.raises(ASRProviderError) as exc_info:
         await _collect(provider, [])
     assert exc_info.value.code == "deepgram_connection"
-    assert "Deepgram connect failed (HTTP 500)" in exc_info.value.message
-    assert "3 attempts" in exc_info.value.message
-    # Should have retried: one initial + retries = max_attempts total rejections.
+    assert "speech recognition" in exc_info.value.message.lower()
     assert server.rejection_count == 3
     assert len(server.connections) == 0
     await provider.close()

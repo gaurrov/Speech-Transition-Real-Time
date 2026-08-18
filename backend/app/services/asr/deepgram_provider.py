@@ -162,7 +162,15 @@ class DeepgramASRProvider(ASRProvider):
 
     # --- internal: connection lifecycle ------------------------------------
 
-    _SMART_FORMAT_LANGUAGES = {"en", "es", "fr", "de", "it", "pt", "nl"}
+    _DEEPGRAM_SUPPORTED_LANGUAGES = {
+        "en", "en-US", "en-GB", "en-AU", "en-IN",
+        "es", "es-419", "fr", "de", "it", "pt", "pt-BR",
+        "nl", "hi", "ja", "ko", "zh", "zh-CN", "zh-TW",
+        "ru", "uk", "sv", "id", "tr", "pl", "da", "no", "fi",
+        "cs", "el", "ro", "bg", "hu", "sk", "hr", "ms", "vi", "th",
+        "tl", "ca",
+        "ta", "te", "kn", "ar",
+    }
 
     def _build_url(self) -> str:
         params: dict[str, str] = {
@@ -174,26 +182,37 @@ class DeepgramASRProvider(ASRProvider):
         }
 
         language = self._language or "auto"
-        is_english = language == "en"
         is_auto = language == "auto"
+        is_supported = language in self._DEEPGRAM_SUPPORTED_LANGUAGES
 
         if self._settings.deepgram_punctuate:
             params["punctuate"] = "true"
-        if self._settings.deepgram_smart_format and (is_auto or language in self._SMART_FORMAT_LANGUAGES):
+        if self._settings.deepgram_smart_format:
             params["smart_format"] = "true"
 
         if is_auto:
             params["multilingual"] = "true"
-        else:
+        elif is_supported:
             params["language"] = language
-            if not is_english:
+            if language != "en":
                 params["multilingual"] = "true"
+        else:
+            params["multilingual"] = "true"
 
         params["encoding"] = "linear16" if self._encoding == "linear16" else self._encoding
         params["sample_rate"] = str(self._sample_rate)
 
         separator = "&" if "?" in self._settings.deepgram_endpoint else "?"
-        return f"{self._settings.deepgram_endpoint}{separator}{urlencode(params)}"
+        url = f"{self._settings.deepgram_endpoint}{separator}{urlencode(params)}"
+        logger.info(
+            "deepgram_url_built",
+            provider="deepgram",
+            language_requested=language,
+            language_sent=params.get("language"),
+            multilingual=params.get("multilingual"),
+            smart_format=params.get("smart_format"),
+        )
+        return url
 
     @staticmethod
     def _safe_response_body(exc: websockets.exceptions.InvalidStatus) -> str:
@@ -247,42 +266,60 @@ class DeepgramASRProvider(ASRProvider):
                 logger.warning(
                     "asr_handshake_rejected",
                     provider="deepgram",
+                    model=self._settings.deepgram_model,
+                    language=self._language,
                     status_code=status,
                     detail=body_detail,
+                    attempt=attempts,
                 )
                 if status in (401, 403):
                     raise ASRProviderError(
                         "deepgram_auth",
-                        "Deepgram authentication failed",
+                        "Speech recognition authentication failed",
                     ) from exc
                 if status == 400:
                     raise ASRProviderError(
                         "deepgram_config",
-                        "Deepgram rejected the request parameters",
+                        "Speech recognition configuration rejected",
                     ) from exc
                 if status == 429:
                     raise ASRProviderError(
                         "deepgram_rate_limit",
-                        "Deepgram rate limit exceeded",
+                        "Speech recognition rate limit exceeded",
                     ) from exc
                 if attempts >= self._settings.deepgram_reconnect_max_attempts:
                     raise ASRProviderError(
                         "deepgram_connection",
-                        f"Deepgram connect failed (HTTP {status}) after {attempts} attempts",
+                        "Unable to connect to speech recognition service",
                     ) from exc
                 await self._backoff(attempts)
             except (TimeoutError, asyncio.TimeoutError) as exc:
+                logger.warning(
+                    "asr_connect_timeout",
+                    provider="deepgram",
+                    model=self._settings.deepgram_model,
+                    language=self._language,
+                    attempt=attempts,
+                )
                 if attempts >= self._settings.deepgram_reconnect_max_attempts:
                     raise ASRProviderError(
                         "deepgram_timeout",
-                        f"Deepgram connection timed out after {attempts} attempts",
+                        "Speech recognition connection timed out",
                     ) from exc
                 await self._backoff(attempts)
             except Exception as exc:
+                logger.warning(
+                    "asr_connect_error",
+                    provider="deepgram",
+                    model=self._settings.deepgram_model,
+                    language=self._language,
+                    error_type=type(exc).__name__,
+                    attempt=attempts,
+                )
                 if attempts >= self._settings.deepgram_reconnect_max_attempts:
                     raise ASRProviderError(
                         "deepgram_connection",
-                        f"Could not connect to Deepgram: {type(exc).__name__}",
+                        "Unable to connect to speech recognition service",
                     ) from exc
                 await self._backoff(attempts)
         raise ASRProviderError("deepgram_closed", "Deepgram provider closed")
@@ -448,18 +485,25 @@ class DeepgramASRProvider(ASRProvider):
 
     def _handle_error(self, payload: dict[str, Any]) -> None:
         status = int(payload.get("status_code") or 0)
-        message = payload.get("message") or payload.get("err_msg") or "Unknown Deepgram error"
-        logger.warning("asr_error_message", provider="deepgram", status_code=status, message=message)
+        message = payload.get("message") or payload.get("err_msg") or "Unknown error"
+        logger.warning(
+            "asr_error_message",
+            provider="deepgram",
+            model=self._settings.deepgram_model,
+            language=self._language,
+            status_code=status,
+            detail=message,
+        )
         if status in (401, 403):
-            self._fail(ASRProviderError("deepgram_auth", "Deepgram authentication failed"))
+            self._fail(ASRProviderError("deepgram_auth", "Speech recognition authentication failed"))
         elif status == 400:
-            self._fail(ASRProviderError("deepgram_config", "Deepgram rejected the request parameters"))
+            self._fail(ASRProviderError("deepgram_config", "Speech recognition configuration rejected"))
         elif status == 429:
-            self._fail(ASRProviderError("deepgram_rate_limit", "Deepgram rate limit exceeded"))
+            self._fail(ASRProviderError("deepgram_rate_limit", "Speech recognition rate limit exceeded"))
         elif status >= 500:
-            self._fail(ASRProviderError("deepgram_connection", "Deepgram server error"))
+            self._fail(ASRProviderError("deepgram_connection", "Speech recognition service error"))
         elif status >= 400 or not status:
-            self._fail(ASRProviderError("deepgram_error", "Deepgram reported an error"))
+            self._fail(ASRProviderError("deepgram_error", "Speech recognition encountered an error"))
 
     # --- internal: latency estimation --------------------------------------
 
