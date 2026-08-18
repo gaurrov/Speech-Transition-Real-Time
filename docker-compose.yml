@@ -60,6 +60,12 @@ services:
       NLLB_DEVICE: ${NLLB_DEVICE:-cpu}
       NLLB_WARM_START: "true"
       NLLB_REQUEST_TIMEOUT: ${NLLB_REQUEST_TIMEOUT:-30}
+      # Pin thread counts to avoid CPU oversubscription inside the container.
+      # PyTorch auto-detects host cores (not the container's CPU share), so
+      # without this it spins up far too many threads that fight for scheduling.
+      NLLB_NUM_THREADS: ${NLLB_NUM_THREADS:-2}
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=4)"]
       interval: 10s
