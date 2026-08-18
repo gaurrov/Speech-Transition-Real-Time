@@ -9,10 +9,10 @@ export function TranslationWarning({ message }: TranslationWarningProps) {
   return (
     <div
       role="status"
-      className="flex items-center gap-2 border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700"
+      className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-700"
     >
-      <AlertIcon className="h-4 w-4 shrink-0" />
-      <span>{message}</span>
+      <AlertIcon className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+      <span className="break-words min-w-0">{message}</span>
     </div>
   )
 }

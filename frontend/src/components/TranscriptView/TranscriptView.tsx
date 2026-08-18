@@ -26,20 +26,20 @@ export function TranscriptView({ segments, partial, status }: TranscriptViewProp
   }
 
   return (
-    <div ref={scrollRef} className="flex h-full max-h-full flex-col gap-2 overflow-y-auto">
+    <div ref={scrollRef} className="flex h-full max-h-full flex-col gap-1 overflow-y-auto">
       {segments.map((segment) => (
-        <p key={segment.segment_id} className="text-sm leading-relaxed text-slate-800">
+        <p key={segment.segment_id} className="text-[12px] leading-relaxed text-slate-700 break-words">
           {segment.text}
           {segment.refined && (
-            <span className="ml-2 rounded bg-indigo-50 px-1.5 py-0.5 align-middle text-[10px] font-medium uppercase tracking-wide text-indigo-500">
-              refined
+            <span className="ml-1.5 inline-block align-middle text-[9px] font-medium text-indigo-400">
+              ✓
             </span>
           )}
         </p>
       ))}
       {partial && (
-        <p className="flex items-start gap-2 text-sm leading-relaxed italic text-slate-500">
-          <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+        <p className="flex items-start gap-1.5 text-[12px] leading-relaxed italic text-slate-400 break-words">
+          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
           {partial}
         </p>
       )}

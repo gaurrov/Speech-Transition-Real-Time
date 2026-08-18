@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { CompactHeader } from "./components/CompactHeader"
-import { CompactPanel } from "./components/CompactPanel"
 import { DiagnosticsPanel } from "./components/DiagnosticsPanel"
 import { ErrorBanner } from "./components/ErrorBanner"
 import { TranslationWarning } from "./components/TranslationWarning"
 import { LanguageBar } from "./components/LanguageBar"
 import { LatencyIndicator } from "./components/LatencyIndicator"
 import { ListeningControls } from "./components/ListeningControls"
+import { OverlayView } from "./components/OverlayView"
 import { SettingsModal } from "./components/SettingsModal"
 import { TranscriptView } from "./components/TranscriptView"
 import { TranslationView } from "./components/TranslationView"
 import { statusMeta } from "./components/status"
-import { LANGUAGES, SOURCE_LANGUAGES } from "./config/languages"
+import { LANGUAGES, SOURCE_LANGUAGES, languageLabel } from "./config/languages"
 import { loadPreferences, savePreferences } from "./config/preferences"
 import { useAudioCapture } from "./hooks/useAudioCapture"
 import { useBackendHealth } from "./hooks/useBackendHealth"
@@ -140,7 +140,11 @@ export default function App() {
   )
 
   const handleToggleWindowMode = useCallback(() => {
-    setWindowMode((current) => (current === "expanded" ? "compact" : "expanded"))
+    setWindowMode((current) => {
+      if (current === "expanded") return "compact"
+      if (current === "compact") return "overlay"
+      return "expanded"
+    })
   }, [])
 
   const handleTogglePinned = useCallback(async () => {
@@ -151,89 +155,138 @@ export default function App() {
   const statusChip = statusMeta(session.status)
   const error = session.error ?? capture.error
 
+  if (windowMode === "overlay") {
+    return (
+      <main className="flex h-full flex-col overflow-hidden">
+        <OverlayView
+          status={session.status}
+          isRunning={isRunning}
+          latestTranslation={session.latestTranslation}
+          translationError={session.translationError}
+          transcriptSegments={session.transcriptSegments}
+          partialText={session.partialText}
+          sourceLanguage={sourceLanguage}
+          targetLanguage={targetLanguage}
+          onStart={() => void handleStart()}
+          onStop={handleStop}
+          onExpand={() => setWindowMode("expanded")}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+
+        <SettingsModal
+          open={settingsOpen}
+          mode={mode}
+          showLatency={showLatency}
+          latencyToggleAvailable={import.meta.env.DEV}
+          vadSilenceThresholdMs={vadSilenceThresholdMs}
+          vadSpeechThreshold={vadSpeechThreshold}
+          audioSource={audioSource}
+          inElectron={inElectron}
+          disabled={isRunning}
+          onAudioSourceChange={setAudioSource}
+          onModeChange={handleModeChange}
+          onShowLatencyChange={setShowLatency}
+          onVADSilenceThresholdChange={handleVADSilenceThresholdChange}
+          onVADSpeechThresholdChange={handleVADSpeechThresholdChange}
+          onClose={() => setSettingsOpen(false)}
+        />
+      </main>
+    )
+  }
+
   return (
-    <main className="flex h-screen flex-col bg-slate-100 text-slate-900">
-      <CompactHeader
-        status={session.status}
-        windowMode={windowMode}
-        pinned={pinned}
-        inElectron={inElectron}
-        sourceLabel={shortCode(sourceLanguage)}
-        targetLabel={shortCode(targetLanguage)}
-        onToggleWindowMode={handleToggleWindowMode}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onTogglePinned={() => void handleTogglePinned()}
-        onMinimize={() => window.desktop?.minimize()}
-        onClose={() => window.desktop?.close()}
-      />
+    <main className={`flex h-full items-stretch justify-center overflow-hidden text-slate-900 ${inElectron ? "bg-white" : "bg-slate-100 p-2"}`}>
+      <div className={`flex h-full w-full max-w-[480px] flex-col overflow-hidden bg-white ${inElectron ? "" : "rounded-xl border border-slate-200 shadow-lg"}`}>
+        {/* Header — shrink-to-fit */}
+        <CompactHeader
+          status={session.status}
+          windowMode={windowMode}
+          pinned={pinned}
+          inElectron={inElectron}
+          sourceLabel={shortCode(sourceLanguage)}
+          targetLabel={languageLabel(targetLanguage)}
+          onToggleWindowMode={handleToggleWindowMode}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onTogglePinned={() => void handleTogglePinned()}
+          onMinimize={() => window.desktop?.minimize()}
+          onClose={() => window.desktop?.close()}
+        />
 
-      <TranslationWarning message={translationWarning} />
+        <TranslationWarning message={translationWarning} />
 
-      <ErrorBanner
-        message={error}
-        onDismiss={() => session.dismissError()}
-      />
+        <ErrorBanner
+          message={error}
+          onDismiss={() => session.dismissError()}
+        />
 
-      {windowMode === "expanded" ? (
-        <>
-          <LanguageBar
-            sourceValue={sourceLanguage}
-            targetValue={targetLanguage}
-            sourceOptions={SOURCE_LANGUAGES}
-            targetOptions={LANGUAGES}
-            onSourceChange={setSourceLanguage}
-            onTargetChange={setTargetLanguage}
-            disabled={isRunning}
-          />
+        {/* Content — flex-1, fills available vertical space */}
+        {windowMode === "expanded" ? (
+          <>
+            <LanguageBar
+              sourceValue={sourceLanguage}
+              targetValue={targetLanguage}
+              sourceOptions={SOURCE_LANGUAGES}
+              targetOptions={LANGUAGES}
+              onSourceChange={setSourceLanguage}
+              onTargetChange={setTargetLanguage}
+              disabled={isRunning}
+            />
 
-          <div className="flex min-h-0 flex-1 flex-col gap-2 px-3 pb-2">
-            <CompactPanel
-              title="LIVE SPEECH"
-              right={
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusChip.textClass} bg-slate-100`}
-                >
-                  {statusChip.label}
-                </span>
-              }
-            >
-              <TranscriptView
-                segments={session.transcriptSegments}
-                partial={session.partialText}
-                status={session.status}
-              />
-            </CompactPanel>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              {/* Transcript — compact, max 25% height */}
+              <div className="flex shrink-0 flex-col border-b border-slate-100" style={{ maxHeight: "25%" }}>
+                <div className="flex items-center justify-between px-3 py-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                    Speech
+                  </span>
+                  <span
+                    className={`text-[10px] font-medium ${statusChip.textClass}`}
+                  >
+                    {statusChip.label}
+                  </span>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-1.5">
+                  <TranscriptView
+                    segments={session.transcriptSegments}
+                    partial={session.partialText}
+                    status={session.status}
+                  />
+                </div>
+              </div>
 
-            <CompactPanel title="TRANSLATION" accent>
-              <TranslationView
-                latest={session.latestTranslation}
-                targetLanguage={targetLanguage}
-                translating={session.status === "translating"}
-                translationError={session.translationError}
-                history={session.translationSegments}
-              />
-            </CompactPanel>
+              {/* Translation — primary, fills remaining space */}
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <TranslationView
+                  latest={session.latestTranslation}
+                  targetLanguage={targetLanguage}
+                  translating={session.status === "translating"}
+                  translationError={session.translationError}
+                  history={session.translationSegments}
+                />
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <TranslationView
+              latest={session.latestTranslation}
+              targetLanguage={targetLanguage}
+              translating={session.status === "translating"}
+              translationError={session.translationError}
+              prominent
+            />
           </div>
-        </>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col justify-center px-4 py-3">
-          <TranslationView
-            latest={session.latestTranslation}
-            targetLanguage={targetLanguage}
-            translating={session.status === "translating"}
-            translationError={session.translationError}
-            prominent
-          />
-        </div>
-      )}
+        )}
 
-      <ListeningControls
-        status={session.status}
-        isRunning={isRunning}
-        sourceLabel={audioSource === "system" ? "System audio" : "Microphone"}
-        onStart={() => void handleStart()}
-        onStop={handleStop}
-      />
+        {/* Footer — shrink-to-fit, pinned to bottom */}
+        <ListeningControls
+          status={session.status}
+          isRunning={isRunning}
+          sourceLabel={audioSource === "system" ? "System audio" : "Microphone"}
+          onStart={() => void handleStart()}
+          onStop={handleStop}
+        />
+      </div>
 
       <SettingsModal
         open={settingsOpen}

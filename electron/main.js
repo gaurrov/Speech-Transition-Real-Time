@@ -23,10 +23,10 @@ const fs = require("node:fs")
 const net = require("node:net")
 const path = require("node:path")
 
-const DEFAULT_WIDTH = 420
-const DEFAULT_HEIGHT = 600
-const MIN_WIDTH = 320
-const MIN_HEIGHT = 480
+const DEFAULT_WIDTH = 380
+const DEFAULT_HEIGHT = 520
+const MIN_WIDTH = 300
+const MIN_HEIGHT = 400
 
 const BACKEND_PORT = Number(process.env.TRANSLATOR_BACKEND_PORT || 8000)
 const BACKEND_HOST = "127.0.0.1"
@@ -181,7 +181,7 @@ function createWindow() {
     frame: false,
     resizable: true,
     alwaysOnTop: true,
-    backgroundColor: "#0f172a",
+    backgroundColor: "#ffffff",
     title: "Live Translator",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

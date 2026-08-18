@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
 /* Frameless Electron window: the header is the drag handle for moving the
    window. Interactive controls inside it must opt out with .app-no-drag. */
 .app-drag {

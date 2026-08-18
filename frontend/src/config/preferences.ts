@@ -27,7 +27,12 @@ export function loadPreferences(): TranslatorPreferences {
     return {
       ...DEFAULTS,
       ...parsed,
-      windowMode: parsed.windowMode === "compact" ? "compact" : "expanded",
+      windowMode:
+        parsed.windowMode === "compact"
+          ? "compact"
+          : parsed.windowMode === "overlay"
+            ? "overlay"
+            : "expanded",
       sessionMode: parsed.sessionMode === "mock" ? "mock" : "live",
       audioSource: parsed.audioSource === "system" ? "system" : "microphone",
     }
