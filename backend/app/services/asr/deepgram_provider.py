@@ -162,6 +162,8 @@ class DeepgramASRProvider(ASRProvider):
 
     # --- internal: connection lifecycle ------------------------------------
 
+    _SMART_FORMAT_LANGUAGES = {"en", "es", "fr", "de", "it", "pt", "nl"}
+
     def _build_url(self) -> str:
         params: dict[str, str] = {
             "model": self._settings.deepgram_model,
@@ -170,17 +172,21 @@ class DeepgramASRProvider(ASRProvider):
             "utterance_end_ms": str(self._settings.deepgram_utterance_end_ms),
             "vad_events": "true",
         }
-        if self._settings.deepgram_punctuate:
-            params["punctuate"] = "true"
-        if self._settings.deepgram_smart_format:
-            params["smart_format"] = "true"
 
         language = self._language or "auto"
-        if language == "auto":
+        is_english = language == "en"
+        is_auto = language == "auto"
+
+        if self._settings.deepgram_punctuate:
+            params["punctuate"] = "true"
+        if self._settings.deepgram_smart_format and (is_auto or language in self._SMART_FORMAT_LANGUAGES):
+            params["smart_format"] = "true"
+
+        if is_auto:
             params["multilingual"] = "true"
         else:
             params["language"] = language
-            if "," in language:
+            if not is_english:
                 params["multilingual"] = "true"
 
         params["encoding"] = "linear16" if self._encoding == "linear16" else self._encoding
