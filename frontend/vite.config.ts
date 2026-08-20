@@ -21,14 +21,15 @@ export default defineConfig({
     assetsInlineLimit: 0,
   },
   server: {
+    host: "127.0.0.1",
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: `http://localhost:${process.env.VITE_BACKEND_PORT || "18000"}`,
         changeOrigin: true,
       },
       "/ws": {
-        target: "ws://localhost:8000",
+        target: `ws://localhost:${process.env.VITE_BACKEND_PORT || "18000"}`,
         ws: true,
       },
     },
